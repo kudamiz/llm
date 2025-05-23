@@ -138,3 +138,32 @@ all_tags = merge_tag_lists(step1_tags, step2_tags)
 final_question = rewrite_question(original_question, all_tags)
 
 print("최종 질문:", final_question)
+
+
+
+#### 수정
+step3_template = """
+You are given a user question and a list of named entity tags with predefined actions for words in a question.  
+Based on these actions, rewrite the question in a clear and grammatically natural way while preserving its meaning.
+And also remove unnecessary words or expressions such as greetings.
+
+### Original Question:
+{original_question}
+
+### Entity Tagging Info:
+{tag_info}
+
+### Action Rules:
+- If action is "remove", delete the entity from the question.
+- If action is "generalize", replace it with the "general_form".
+- If action is "keep", leave it as is.
+
+### Output Example:
+How do I change the grade for a specific lot ID?
+"""
+
+step3_prompt = PromptTemplate(
+    template=step3_template,
+    template_format="jinja2",
+    input_variables=["original_question","tag_info"],
+)
