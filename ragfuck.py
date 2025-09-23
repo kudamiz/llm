@@ -1,4 +1,4 @@
-from bs4 import BeautifulSoup
+7from bs4 import BeautifulSoup
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 
 def chunk_html_hybrid(
@@ -103,3 +103,84 @@ for i, chunk in enumerate(chunks):
     print(f"--- 청크 {i+1} (길이: {len(chunk)}) ---")
     print(chunk)
     print()
+
+
+from bs4 import BeautifulSoup
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+def chunk_html_robust(
+    html_content: str,
+    chunk_size: int = 500,
+    chunk_overlap: int = 100,
+):
+    """
+    규칙성이 적은 HTML을 더 안정적으로 청킹합니다.
+    HTML 구조를 무시하고 텍스트를 먼저 합친 후, 의미 단위로 분할합니다.
+
+    Args:
+        html_content (str): 분석할 HTML 문서 문자열.
+        chunk_size (int): 청크의 최대 크기 (글자 수 기준).
+        chunk_overlap (int): 청크 간의 중복되는 글자 수.
+
+    Returns:
+        list[str]: 청킹된 텍스트 조각들의 리스트.
+    """
+    # 1. BeautifulSoup으로 HTML을 파싱하고 텍스트만 추출
+    # --------------------------------------------------
+    soup = BeautifulSoup(html_content, "html.parser")
+
+    # 스크립트, 스타일 등 불필요한 태그 제거
+    for tag in soup(['script', 'style']):
+        tag.decompose()
+
+    # get_text(separator='\n')를 사용해 줄바꿈을 유지하며 전체 텍스트를 하나로 합침
+    # 이렇게 하면 <p>, <div>, <br> 등이 모두 자연스러운 줄바꿈(\n)으로 변환됨
+    full_text = soup.get_text(separator='\n', strip=True)
+    
+    # 2. LangChain의 RecursiveCharacterTextSplitter로 텍스트 분할
+    # --------------------------------------------------
+    text_splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        length_function=len,
+        is_separator_regex=False,
+        # 문단 -> 줄바꿈 -> 문장 순으로 우선순위를 두어 분할
+        separators=["\n\n", "\n", ". ", " ", ""],
+    )
+
+    chunks = text_splitter.split_text(full_text)
+    
+    return chunks
+
+# --- 사용 예시 ---
+
+# 줄글이 아니고, div와 br로만 구성된 불규칙한 HTML 샘플
+html_doc_irregular = """
+<html>
+<body>
+    <h3>제품 스펙</h3>
+    <div>모델명: ABC-123</div>
+    <div>제조사: 가나다전자</div>
+    <br>
+    <div>CPU: 8-core Processor</div>
+    <div>RAM: 16GB LPDDR5</div>
+    <div>Storage: 512GB NVMe SSD</div>
+    <h3>특이사항</h3>
+    - 전원 어댑터는 별도 구매<br>
+    - 소프트웨어 업데이트는 3년간 보장됩니다.<br>
+    - 품질 보증 기간은 1년입니다. 이 기간 내에 발생하는 하드웨어 결함에 대해서는 무상 수리가 지원됩니다.
+    <script>alert('이건 안나와야 해요');</script>
+</body>
+</html>
+"""
+
+# 함수 호출 (chunk_size를 작게 설정하여 분리 확인)
+chunks = chunk_html_robust(html_doc_irregular, chunk_size=100, chunk_overlap=20)
+
+# 결과 출력
+print(f"총 {len(chunks)}개의 청크로 분리되었습니다.\n")
+for i, chunk in enumerate(chunks):
+    print(f"--- 청크 {i+1} (길이: {len(chunk)}) ---")
+    print(chunk)
+    print()
+
