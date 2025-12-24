@@ -559,3 +559,63 @@ def create_ppt_file(slide_data, template_path, output_path):
 
 # (참고) parse_table_string 함수는 기존에 드린 것을 그대로 쓰시면 됩니다.
 
+
+from pptx.util import Pt
+from pptx.enum.text import PP_ALIGN
+
+def insert_styled_table(shape, content_string):
+    """
+    Placeholder(shape)에 문자열(content_string)을 파싱하여 스타일이 적용된 표를 삽입합니다.
+    """
+    print(f"    📊 표 생성 시작...")
+    
+    # 1. 데이터 파싱
+    table_data = parse_table_string(content_string)
+    rows = len(table_data)
+    cols = len(table_data[0]) if rows > 0 else 0
+    
+    if rows == 0:
+        print("      ⚠️ 데이터가 없어 표를 생략합니다.")
+        return
+
+    try:
+        # 2. 표 객체 생성
+        graphic_frame = shape.insert_table(rows=rows, cols=cols)
+        table = graphic_frame.table
+        
+        # 3. PPT 스타일 ID 적용 (테마 색상)
+        table.table_style_id = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}'
+
+        # 4. 데이터 입력 및 폰트 서식
+        for r in range(rows):
+            for c in range(cols):
+                cell = table.cell(r, c)
+                cell.text = str(table_data[r][c])
+                
+                # 셀 내부 서식 설정
+                for paragraph in cell.text_frame.paragraphs:
+                    paragraph.font.size = Pt(12)      # 12포인트
+                    paragraph.font.name = '맑은 고딕' # 한글 폰트
+                    paragraph.alignment = PP_ALIGN.CENTER # 가운데 정렬
+                    
+                    # 헤더(첫 줄) 굵게
+                    if r == 0:
+                        paragraph.font.bold = True
+        
+        print("      ✅ 표 생성 및 스타일링 완료")
+        
+    except AttributeError:
+        print("      ❌ 에러: 이 Placeholder는 '표'를 넣을 수 있는 타입이 아닙니다.")
+    except Exception as e:
+        print(f"      ❌ 표 생성 중 알 수 없는 에러: {e}")
+
+# (기존 파싱 헬퍼 함수도 필요합니다)
+def parse_table_string(text_data):
+    rows = []
+    for line in text_data.strip().split('\n'):
+        if "|" in line:
+            cols = [c.strip() for c in line.split('|')]
+            if set(cols[0]) <= {'-', ' '}: continue
+            rows.append(cols)
+    return rows
+
