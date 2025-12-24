@@ -81,3 +81,87 @@ def generate_slide_json(user_input: str, template_guide: str):
     
     # 결과 반환 (Pydantic 객체)
     return chain.invoke({"guide": template_guide, "input": user_input})
+ 
+from pptx import Presentation
+
+# --- [설정] 파일 경로 ---
+TEMPLATE_PATH = "my_template.pptx"   # 준비된 템플릿 파일
+OUTPUT_PATH = "step3_test_result.pptx" # 결과 파일
+
+# ====================================================
+# [가정] Step 2에서 AI가 만들어줬다고 칠 '가짜 데이터'
+# ====================================================
+# 주의: 아래 딕셔너리의 Key값("Title", "Body_Left" 등)은 
+# 반드시 PPT '선택 창'에서 지정한 이름과 똑같아야 합니다!
+mock_slide_data = {
+    "layout_index": 1,  # 템플릿에서 테스트하고 싶은 레이아웃 번호 (예: 1번)
+    "content_mapping": {
+        "Title": "Step 3 단독 테스트 성공!", 
+        "Body_Left": "여기는 왼쪽 본문 영역입니다.\n데이터가 잘 들어갔나요?",
+        "Body_Right": "여기는 오른쪽 본문 영역입니다.\nPython-pptx로 생성되었습니다."
+    }
+}
+
+# ====================================================
+# 3. Renderer 함수 (파일 생성 로직)
+# ====================================================
+def create_ppt_file_test(data, template_path, output_path):
+    print(f"📂 템플릿 여는 중: {template_path}")
+    try:
+        prs = Presentation(template_path)
+    except FileNotFoundError:
+        print("❌ 오류: 템플릿 파일을 찾을 수 없습니다.")
+        return
+
+    # 1. 레이아웃 선택
+    target_index = data["layout_index"]
+    try:
+        selected_layout = prs.slide_layouts[target_index]
+        print(f"🎨 선택된 레이아웃: '{selected_layout.name}' (Index: {target_index})")
+    except IndexError:
+        print(f"❌ 오류: 레이아웃 번호 {target_index}번은 존재하지 않습니다.")
+        return
+
+    # 2. 슬라이드 추가
+    slide = prs.slides.add_slide(selected_layout)
+
+    # 3. 데이터 매핑 (핵심!)
+    mapping = data["content_mapping"]
+    
+    matched_count = 0
+    print("\n--- [데이터 매핑 시작] ---")
+    
+    for shape in slide.placeholders:
+        shape_name = shape.name # PPT에 설정된 이름
+        
+        # 1) 이름이 매칭되는지 확인
+        if shape_name in mapping:
+            text_to_insert = mapping[shape_name]
+            
+            # 2) 텍스트를 넣을 수 있는 상자인지 확인
+            if shape.has_text_frame:
+                text_frame = shape.text_frame
+                text_frame.clear() # 기존 텍스트(제목을 입력하세요 등) 삭제
+                
+                p = text_frame.paragraphs[0]
+                p.text = text_to_insert
+                print(f"✅ [성공] '{shape_name}' 상자에 텍스트 입력됨.")
+                matched_count += 1
+            else:
+                print(f"⚠️ [주의] '{shape_name}'은 이름은 맞지만 텍스트 상자가 아닙니다.")
+        else:
+            # 매칭 실패 시 (디버깅용)
+            print(f"ℹ️ [Skip] PPT엔 '{shape_name}' 상자가 있는데, 보낼 데이터(JSON)엔 없습니다.")
+
+    # 4. 결과 저장
+    if matched_count > 0:
+        prs.save(output_path)
+        print(f"\n✨ 파일 생성 완료! '{output_path}'를 확인하세요.")
+    else:
+        print("\n❌ 경고: 매칭된 데이터가 하나도 없습니다. PPT 상자 이름(Key)을 확인하세요!")
+
+# ====================================================
+# 실행
+# ====================================================
+if __name__ == "__main__":
+    create_ppt_file_test(mock_slide_data, TEMPLATE_PATH, OUTPUT_PATH)
