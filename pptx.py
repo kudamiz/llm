@@ -619,3 +619,32 @@ def parse_table_string(text_data):
             rows.append(cols)
     return rows
 
+def insert_multiline_text(shape, content):
+    """
+    줄바꿈 문자(\\n)가 포함된 텍스트를 받아서,
+    PPT 상자에 여러 줄(단락)로 나누어 입력합니다.
+    """
+    if not shape.has_text_frame:
+        return
+
+    text_frame = shape.text_frame
+    text_frame.clear() # 기존 텍스트(제목을 입력하세요 등) 싹 지우기
+
+    # 1. 텍스트를 줄바꿈 문자 기준으로 쪼갭니다.
+    # 예: "A\nB\nC" -> ['A', 'B', 'C']
+    lines = content.strip().split('\n')
+
+    # 2. 첫 번째 줄 입력 (기존에 존재하는 첫 단락 사용)
+    if lines:
+        p = text_frame.paragraphs[0]
+        p.text = lines[0]
+        
+        # (옵션) 폰트 설정이 필요하면 여기서 p.font... 설정
+
+    # 3. 두 번째 줄부터는 '단락 추가(add_paragraph)'를 해서 넣습니다.
+    for line in lines[1:]:
+        p = text_frame.add_paragraph() # 엔터 치는 효과
+        p.text = line
+        # (옵션) 마찬가지로 폰트 설정 가능
+        # p.font.size = Pt(18)
+
