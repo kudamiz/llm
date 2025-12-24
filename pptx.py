@@ -453,3 +453,109 @@ def create_ppt_file(slide_data, template_path, output_path):
     # 4. 저장
     prs.save(output_path)
     print(f"\n✨ 파일 생성 완료! {output_path}")
+
+
+import os
+from pptx import Presentation
+# [추가된 import] 폰트 크기와 정렬 설정을 위해 필요합니다.
+from pptx.util import Pt
+from pptx.enum.text import PP_ALIGN
+
+def create_ppt_file(slide_data, template_path, output_path):
+    prs = Presentation(template_path)
+    
+    # 1. 레이아웃 가져오기 (객체 vs 딕셔너리 호환)
+    try:
+        target_index = slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+    except (AttributeError, KeyError):
+        target_index = slide_data["layout_index"] if isinstance(slide_data, dict) else slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+        
+    # 2. 슬라이드 추가
+    slide = prs.slides.add_slide(selected_layout)
+    print(f"🎨 선택된 레이아웃: {selected_layout.name} (Index: {target_index})")
+
+    # 데이터 매핑 준비
+    if hasattr(slide_data, "content_mapping"):
+        mapping = slide_data.content_mapping
+    else:
+        mapping = slide_data["content_mapping"]
+
+    # 3. 데이터 매핑 (이미지, 표[스타일적용], 텍스트)
+    for shape in slide.placeholders:
+        shape_idx = shape.placeholder_format.idx
+        
+        # 원본 이름 찾기 (Loop 방식 - 안전함)
+        original_name = shape.name 
+        for layout_shape in selected_layout.placeholders:
+            if layout_shape.placeholder_format.idx == shape_idx:
+                original_name = layout_shape.name
+                break
+        
+        # 매핑할 데이터가 있는 경우만 실행
+        if original_name in mapping:
+            content = mapping[original_name]
+            
+            # --- [Case 1] 이미지 처리 ---
+            if original_name.lower().startswith("image_"):
+                if os.path.exists(content):
+                    try:
+                        shape.insert_picture(content)
+                        print(f"    🖼️ 이미지 삽입 성공: {content}")
+                    except AttributeError:
+                        print("    ❌ 에러: 이 칸은 '그림' 타입이 아닙니다.")
+                else:
+                    print(f"    ❌ 에러: 이미지 파일을 찾을 수 없습니다 ({content})")
+
+            # --- [Case 2] 표 처리 (스타일 적용 추가됨!) ---
+            elif original_name.lower().startswith("table_"):
+                # (전제: parse_table_string 함수가 코드 하단에 있어야 함)
+                table_data = parse_table_string(content) 
+                
+                rows = len(table_data)
+                cols = len(table_data[0]) if rows > 0 else 0
+                
+                if rows > 0:
+                    try:
+                        # 1) 표 생성
+                        graphic_frame = shape.insert_table(rows=rows, cols=cols)
+                        table = graphic_frame.table
+                        
+                        # 2) [NEW] 표 스타일 ID 적용 (기본: 중간 스타일 2 - 강조 1)
+                        # 이 ID를 넣어야 PPT 테마 색상을 따라갑니다.
+                        table.table_style_id = '{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}'
+
+                        # 3) [NEW] 데이터 입력 및 서식 지정
+                        for r in range(rows):
+                            for c in range(cols):
+                                cell = table.cell(r, c)
+                                cell.text = str(table_data[r][c])
+                                
+                                # 폰트/정렬 디테일 설정
+                                for paragraph in cell.text_frame.paragraphs:
+                                    paragraph.font.size = Pt(12)      # 글자 크기 12pt
+                                    paragraph.font.name = '맑은 고딕' # 한글 폰트 지정
+                                    paragraph.alignment = PP_ALIGN.CENTER # 가운데 정렬
+                                    
+                                    # 첫 번째 줄(헤더)은 굵게 처리
+                                    if r == 0:
+                                        paragraph.font.bold = True
+
+                        print("    📊 표 생성 및 스타일 적용 성공")
+                    except AttributeError:
+                        print("    ❌ 에러: 이 칸은 '표' 타입이 아닙니다.")
+
+            # --- [Case 3] 일반 텍스트 처리 ---
+            else:
+                if shape.has_text_frame:
+                    shape.text_frame.clear()
+                    shape.text_frame.paragraphs[0].text = content
+                    print(f"    ✅ 텍스트 입력 완료: {original_name}")
+
+    # 4. 저장
+    prs.save(output_path)
+    print(f"\n✨ 파일 생성 완료! {output_path}")
+
+# (참고) parse_table_string 함수는 기존에 드린 것을 그대로 쓰시면 됩니다.
+
