@@ -394,3 +394,62 @@ def parse_table_string(text_data):
                 continue 
             rows.append(cols)
     return rows
+
+
+
+def create_ppt_file(slide_data, template_path, output_path):
+    prs = Presentation(template_path)
+    
+    # 1. 레이아웃 가져오기
+    try:
+        target_index = slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+    except (AttributeError, KeyError):
+        target_index = slide_data["layout_index"] if isinstance(slide_data, dict) else slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+        
+    # 2. 슬라이드 추가
+    slide = prs.slides.add_slide(selected_layout)
+    print(f"🎨 선택된 레이아웃: {selected_layout.name} (Index: {target_index})")
+
+    # 데이터 매핑 준비
+    if hasattr(slide_data, "content_mapping"):
+        mapping = slide_data.content_mapping
+    else:
+        mapping = slide_data["content_mapping"]
+
+    # 3. 데이터 매핑 (안전한 Loop 방식 적용)
+    for shape in slide.placeholders:
+        # 슬라이드 상자의 번호표(idx) 확인
+        shape_idx = shape.placeholder_format.idx
+        
+        # [핵심 수정] selected_layout.placeholders[shape_idx] 라고 쓰면 에러가 남!
+        # 대신, 레이아웃의 상자들을 하나씩 돌면서 번호가 같은지 직접 확인합니다.
+        
+        original_name = shape.name # 못 찾을 경우를 대비한 기본값
+        
+        for layout_shape in selected_layout.placeholders:
+            # 레이아웃 상자의 번호와 슬라이드 상자의 번호가 같으면?
+            if layout_shape.placeholder_format.idx == shape_idx:
+                original_name = layout_shape.name # 그 이름을 가져옴 (예: Body_Left)
+                break
+        
+        print(f"  🔍 매핑 시도: 슬라이드(IDX:{shape_idx}) -> 원본이름 '{original_name}'")
+
+        # 찾은 원본 이름으로 데이터 매핑
+        if original_name in mapping:
+            content = mapping[original_name]
+            
+            if shape.has_text_frame:
+                text_frame = shape.text_frame
+                text_frame.clear()
+                p = text_frame.paragraphs[0]
+                p.text = content
+                print(f"    ✅ 성공! 내용 입력됨.")
+        else:
+            # 매칭 안 된 경우
+            pass 
+
+    # 4. 저장
+    prs.save(output_path)
+    print(f"\n✨ 파일 생성 완료! {output_path}")
