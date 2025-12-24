@@ -165,3 +165,60 @@ def create_ppt_file_test(data, template_path, output_path):
 # ====================================================
 if __name__ == "__main__":
     create_ppt_file_test(mock_slide_data, TEMPLATE_PATH, OUTPUT_PATH)
+
+
+# [수정된 버전] 3. Renderer 함수 (원본 레이아웃 이름 추적 방식)
+def create_ppt_file(slide_data, template_path, output_path):
+    prs = Presentation(template_path)
+    
+    # 1. LLM이 고른 레이아웃 가져오기
+    # (Pydantic 객체 접근법 사용)
+    try:
+        target_index = slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+    except (AttributeError, KeyError):
+        # 딕셔너리로 들어올 경우 대비
+        target_index = slide_data["layout_index"] if isinstance(slide_data, dict) else slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+        
+    # 2. 슬라이드 추가
+    slide = prs.slides.add_slide(selected_layout)
+    print(f"🎨 선택된 레이아웃: {selected_layout.name} (Index: {target_index})")
+
+    # 데이터 매핑 준비
+    if hasattr(slide_data, "content_mapping"):
+        mapping = slide_data.content_mapping
+    else:
+        mapping = slide_data["content_mapping"]
+
+    # 3. 데이터 매핑 (여기가 핵심 수정!!!)
+    for shape in slide.placeholders:
+        # 슬라이드 상자의 이름(shape.name)을 쓰는 게 아니라,
+        # '번호(idx)'를 이용해서 '레이아웃의 원래 이름'을 찾아옵니다.
+        try:
+            shape_idx = shape.placeholder_format.idx
+            # "설계도야, 이 번호(idx) 가진 상자 원래 이름이 뭐니?"
+            original_name = selected_layout.placeholders[shape_idx].name
+        except KeyError:
+            # 혹시라도 못 찾으면 그냥 현재 이름 사용
+            original_name = shape.name
+
+        print(f"  🔍 확인 중: 슬라이드상 이름 '{shape.name}' -> 원본 이름 '{original_name}'")
+
+        # 이제 '원본 이름'으로 매핑을 시도합니다.
+        if original_name in mapping:
+            content = mapping[original_name]
+            
+            if shape.has_text_frame:
+                text_frame = shape.text_frame
+                text_frame.clear()
+                p = text_frame.paragraphs[0]
+                p.text = content
+                print(f"    ✅ 매칭 성공! 내용 입력 완료.")
+        else:
+            # 매칭 안 된 경우 (디버깅용 로그)
+            pass 
+
+    # 4. 저장
+    prs.save(output_path)
+    print(f"\n✨ 파일 생성 완료! {output_path}")
