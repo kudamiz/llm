@@ -281,3 +281,116 @@ def create_ppt_file(slide_data, template_path, output_path):
     prs.save(output_path)
     print(f"\n✨ 파일 생성 완료! {output_path}")
 
+
+import os
+from pptx import Presentation
+
+def create_ppt_file(slide_data, template_path, output_path):
+    prs = Presentation(template_path)
+    
+    # 1. 레이아웃 가져오기 (이전과 동일)
+    try:
+        target_index = slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+    except (AttributeError, KeyError):
+        target_index = slide_data["layout_index"] if isinstance(slide_data, dict) else slide_data.layout_index
+        selected_layout = prs.slide_layouts[target_index]
+        
+    # 2. 슬라이드 추가
+    slide = prs.slides.add_slide(selected_layout)
+    print(f"🎨 선택된 레이아웃: {selected_layout.name} (Index: {target_index})")
+
+    # 데이터 매핑 준비
+    if hasattr(slide_data, "content_mapping"):
+        mapping = slide_data.content_mapping
+    else:
+        mapping = slide_data["content_mapping"]
+
+    # 3. 데이터 매핑 (이미지, 표 로직 추가)
+    for shape in slide.placeholders:
+        shape_idx = shape.placeholder_format.idx
+        
+        # 원본 이름 찾기 (Loop 방식)
+        original_name = shape.name 
+        for layout_shape in selected_layout.placeholders:
+            if layout_shape.placeholder_format.idx == shape_idx:
+                original_name = layout_shape.name
+                break
+        
+        print(f"  🔍 매핑 시도: '{original_name}'")
+
+        if original_name in mapping:
+            content = mapping[original_name]
+            
+            # --- [Case 1] 이미지 처리 (이름이 image_ 로 시작) ---
+            if original_name.lower().startswith("image_"):
+                print(f"    🖼️ 이미지 삽입 시도: {content}")
+                if os.path.exists(content):
+                    try:
+                        # 이미지를 해당 칸에 꽉 차게 집어넣음
+                        shape.insert_picture(content)
+                        print("      ✅ 이미지 삽입 성공!")
+                    except AttributeError:
+                        print("      ❌ 오류: 이 상자는 '그림' 타입Placeholder가 아닙니다.")
+                else:
+                    print(f"      ❌ 오류: 이미지 파일을 찾을 수 없습니다 ({content})")
+
+            # --- [Case 2] 표 처리 (이름이 table_ 로 시작) ---
+            elif original_name.lower().startswith("table_"):
+                print(f"    📊 표 생성 시도...")
+                # 문자열 데이터를 표 구조로 변환 (아래 헬퍼 함수 참고)
+                table_data = parse_table_string(content) 
+                
+                rows = len(table_data)
+                cols = len(table_data[0]) if rows > 0 else 0
+                
+                if rows > 0 and cols > 0:
+                    try:
+                        # 1. 표 삽입 (기존 placeholder 자리에 표 객체 생성)
+                        graphic_frame = shape.insert_table(rows=rows, cols=cols)
+                        table = graphic_frame.table
+                        
+                        # 2. 데이터 채워넣기
+                        for r in range(rows):
+                            for c in range(cols):
+                                cell = table.cell(r, c)
+                                cell.text = str(table_data[r][c])
+                        print("      ✅ 표 생성 성공!")
+                    except AttributeError:
+                         print("      ❌ 오류: 이 상자는 '표' 또는 '내용' 타입 Placeholder가 아닙니다.")
+                else:
+                     print("      ⚠️ 표 데이터가 비어있습니다.")
+
+            # --- [Case 3] 일반 텍스트 처리 ---
+            else:
+                if shape.has_text_frame:
+                    text_frame = shape.text_frame
+                    text_frame.clear()
+                    p = text_frame.paragraphs[0]
+                    p.text = content
+                    print(f"    ✅ 텍스트 입력 완료.")
+                else:
+                    pass
+
+    # 4. 저장
+    prs.save(output_path)
+    print(f"\n✨ 파일 생성 완료! {output_path}")
+
+# --- [헬퍼 함수] 문자열을 2차원 리스트(표 데이터)로 변환 ---
+def parse_table_string(text_data):
+    """
+    LLM이 준 문자열을 파싱합니다.
+    (예: '헤더1|헤더2\n값1|값2' -> [['헤더1', '헤더2'], ['값1', '값2']])
+    """
+    rows = []
+    lines = text_data.strip().split('\n')
+    for line in lines:
+        # 파이프(|)로 셀을 구분한다고 가정
+        if "|" in line:
+            # 양옆 공백 제거 후 리스트로 변환
+            cols = [c.strip() for c in line.split('|')]
+            # 마크다운 표의 구분선(|---|---|)은 제거
+            if set(cols[0]) <= {'-', ' '}: 
+                continue 
+            rows.append(cols)
+    return rows
