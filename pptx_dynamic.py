@@ -124,3 +124,73 @@ def renderer_node(state: AgentState):
 
     prs.save(state["output_path"])
     return {"final_message": "완료"}
+
+
+# template_config.py
+
+TEMPLATE_REGISTRY = {
+    # === [Static] 정형화된 템플릿 ===
+    "Title_Slide": {
+        "type": "static",
+        "desc": "프레젠테이션의 표지입니다. 제목과 부제목만 들어갑니다.",
+        "rules": {"Title": "20자 이내", "Subtitle": "날짜/발표자 포함"}
+    },
+    "Agenda_Slide": {
+        "type": "static",
+        "desc": "목차를 나열할 때 사용합니다.",
+        "rules": {"Content": "개조식으로 작성"}
+    },
+
+    # === [Dynamic] 자유 배치 템플릿 ===
+    "Dynamic_Split": {
+        "type": "dynamic",
+        "desc": "두 가지 항목(예: 매출 비교, 경쟁사 분석)을 좌우로 비교할 때 씁니다.",
+        "anchors": ["Guide_Left", "Guide_Right"] # (참고용: 실제 파일과 일치해야 함)
+    },
+    "Dynamic_Full": {
+        "type": "dynamic",
+        "desc": "복잡한 대형 표나 차트 하나를 크게 보여줄 때 씁니다.",
+        "anchors": ["Guide_Main"]
+    }
+}
+
+def generate_template_guide(pptx_path):
+    prs = Presentation(pptx_path)
+    guide_lines = []
+    
+    # 1. Static과 Dynamic을 구분해서 보여주기 위해 리스트 분리
+    static_guides = ["--- [Static Layouts: 채우기 모드] ---"]
+    dynamic_guides = ["--- [Dynamic Layouts: 그리기 모드] ---"]
+
+    for i, layout in enumerate(prs.slide_layouts):
+        name = layout.name
+        
+        # [필터링] 레지스트리에 없는 레이아웃은 LLM에게 안 보여줌 (토큰 절약)
+        if name not in TEMPLATE_REGISTRY:
+            continue
+            
+        config = TEMPLATE_REGISTRY[name]
+        desc = config.get("desc", "")
+        
+        # === A. Static 처리 ===
+        if config["type"] == "static":
+            placeholders = [p.name for p in layout.placeholders]
+            info = f"\nCreate [Index: {i}] Name: '{name}'"
+            info += f"\n   - 용도: {desc}"
+            info += f"\n   - 입력칸: {', '.join(placeholders)}"
+            static_guides.append(info)
+            
+        # === B. Dynamic 처리 ===
+        elif config["type"] == "dynamic":
+            # 실제 파일에서 'Guide_'로 시작하는 도형 찾기
+            real_anchors = [s.name for s in layout.shapes if s.name.startswith("Guide_")]
+            
+            info = f"\nCreate [Index: {i}] Name: '{name}'"
+            info += f"\n   - 용도: {desc}"
+            info += f"\n   - 가이드 영역(Anchors): {', '.join(real_anchors)}"
+            dynamic_guides.append(info)
+
+    # 두 그룹을 합쳐서 리턴
+    full_text = "\n".join(static_guides + ["\n"] + dynamic_guides)
+    return full_text
+
