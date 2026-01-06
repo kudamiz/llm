@@ -324,4 +324,73 @@ def inspect_template(pptx_path):
 inspect_template("my_template.pptx")
 
 
+def renderer_node(state: AgentState):
+    # ... (생략) ...
+    
+    # 헬퍼 함수: idx로 진짜 이름 찾기 (이전 단계에서 만든 것)
+    def get_real_ph_name(slide_ph):
+        current_idx = slide_ph.placeholder_format.idx
+        for parent_ph in slide_ph.part.slide_layout.placeholders:
+            if parent_ph.placeholder_format.idx == current_idx:
+                return parent_ph.name
+        return slide_ph.name
+
+    for plan in slides_data:
+        layout_idx = plan["layout_index"]
+        slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
+        
+        # ====================================================
+        # [PART A] Placeholder 채우기 (Title, Subtitle, Static 내용)
+        # ====================================================
+        # AI가 준 데이터 중 'content_mapping'과 'common_fields'를 합쳐서 봅니다.
+        fill_data = {**plan.get("content_mapping", {}), **plan.get("common_fields", {})}
+        
+        for shape in slide.placeholders:
+            real_name = get_real_ph_name(shape) # idx 기반 역추적
+            
+            # Title 예외처리
+            if shape.placeholder_format.type == 1: 
+                real_name = "Title"
+
+            if real_name in fill_data:
+                # 텍스트 삽입 로직
+                shape.text = fill_data[real_name] 
+
+        # ====================================================
+        # [PART B] Anchor 위에 그리기 (Dynamic Components)
+        # ====================================================
+        if plan.get("type") == "dynamic":
+            components = plan.get("components", [])
+            
+            # 1. 레이아웃 원본에서 앵커 좌표 수집 (슬라이드X -> 레이아웃O)
+            layout = prs.slide_layouts[layout_idx]
+            anchors = {}
+            
+            for shape in layout.shapes:
+                # Placeholder가 아니고, 이름이 Guide_로 시작하는 것
+                if not shape.is_placeholder and shape.name.startswith("Guide_"):
+                    anchors[shape.name] = (shape.left, shape.top, shape.width, shape.height)
+            
+            # 2. 좌표에 맞춰 그리기
+            for comp in components:
+                target_name = comp["position"]
+                
+                if target_name in anchors:
+                    x, y, w, h = anchors[target_name]
+                    
+                    # (그리기 함수 호출)
+                    if comp["type"] == "chart":
+                        draw_chart(slide, x, y, w, h, comp["data"])
+                    elif comp["type"] == "table":
+                        draw_table(slide, x, y, w, h, comp["data"])
+                    elif comp["type"] == "text":
+                        # Anchor 위에 텍스트 상자를 새로 그림
+                        draw_text_box(slide, x, y, w, h, comp["content"])
+                else:
+                    print(f"⚠️ 앵커 못 찾음: {target_name}")
+                    
+    # ...
+
+
+
 
