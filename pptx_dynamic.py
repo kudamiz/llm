@@ -280,3 +280,27 @@ def renderer_node(state: AgentState):
     prs.save(state["output_path"])
 
 
+def get_real_placeholder_name(slide_shape):
+    """
+    슬라이드에 있는 쉐이프(Placeholder)의 진짜 이름을 
+    원본 레이아웃(Master)에서 찾아옵니다.
+    """
+    try:
+        # 1. 현재 상자의 고유 ID (idx) 확인
+        idx = slide_shape.placeholder_format.idx
+        
+        # 2. 이 슬라이드를 만든 '부모 레이아웃'을 호출
+        layout = slide_shape.part.slide_layout
+        
+        # 3. 레이아웃에서 똑같은 idx를 가진 상자를 찾음
+        original_shape = layout.placeholders[idx]
+        
+        # 4. 그 상자의 이름(우리가 지어준 이름)을 반환
+        return original_shape.name
+        
+    except Exception as e:
+        # 일반 도형이거나 찾을 수 없으면 그냥 현재 이름 반환
+        return slide_shape.name
+
+
+
