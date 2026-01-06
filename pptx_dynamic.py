@@ -392,5 +392,204 @@ def renderer_node(state: AgentState):
     # ...
 
 
+import io
+import os
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.dml.color import RGBColor
+
+# (State 타입 정의는 다른 파일에 있다고 가정, 여기서는 참조용으로 기재)
+# from state import AgentState 
+
+# ====================================================
+# [Helper 1] Placeholder 이름 역추적 함수 (필수!)
+# ====================================================
+def get_real_placeholder_name(slide_shape):
+    """
+    슬라이드 상자의 idx(고유번호)를 이용해 
+    원본 레이아웃(Master)에 적힌 진짜 이름을 찾아냅니다.
+    (예: 'Text Placeholder 3' -> 'Body_Content')
+    """
+    try:
+        # 1. 현재 상자의 주민번호(idx) 확인
+        current_idx = slide_shape.placeholder_format.idx
+        
+        # 2. 족보(부모 레이아웃) 조회
+        layout = slide_shape.part.slide_layout
+        
+        # 3. 레이아웃의 모든 Placeholder를 뒤져서 같은 idx 찾기
+        for parent_ph in layout.placeholders:
+            if parent_ph.placeholder_format.idx == current_idx:
+                return parent_ph.name
+        
+        # 못 찾으면 기본 이름 반환
+        return slide_shape.name
+    except:
+        return slide_shape.name
+
+# ====================================================
+# [Helper 2] Dynamic 모드용 그리기 도구 (Painters)
+# ====================================================
+def draw_chart(slide, x, y, w, h, data):
+    """
+    data format: {'labels': ['A', 'B'], 'values': [10, 20], 'title': 'Optional'}
+    """
+    chart_data = CategoryChartData()
+    chart_data.categories = data.get('labels', [])
+    chart_data.add_series('Series 1', data.get('values', []))
+    
+    # 기본 막대 차트 생성
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, w, h, chart_data
+    ).chart
+    
+    # 차트 제목 설정 (데이터에 있으면)
+    if 'title' in data:
+        chart.chart_title.text_frame.text = data['title']
+
+def draw_table(slide, x, y, w, h, data_rows):
+    """
+    data_rows: [['Header1', 'Header2'], ['Val1', 'Val2']]
+    """
+    if not data_rows: return
+    rows = len(data_rows)
+    cols = len(data_rows[0])
+    
+    graphic_frame = slide.shapes.add_table(rows, cols, x, y, w, h)
+    table = graphic_frame.table
+    
+    for r in range(rows):
+        for c in range(cols):
+            cell = table.cell(r, c)
+            cell.text = str(data_rows[r][c])
+            # (옵션) 폰트 사이즈 조정
+            cell.text_frame.paragraphs[0].font.size = Pt(12)
+
+def draw_text_box(slide, x, y, w, h, text):
+    tb = slide.shapes.add_textbox(x, y, w, h)
+    tf = tb.text_frame
+    tf.text = text
+    tf.word_wrap = True
+
+def draw_dynamic_image(slide, x, y, w, h, image_key, registry):
+    if image_key in registry:
+        img_stream = io.BytesIO(registry[image_key])
+        slide.shapes.add_picture(img_stream, x, y, width=w, height=h)
+    else:
+        # 이미지가 없으면 텍스트박스로 경고 표시
+        draw_text_box(slide, x, y, w, h, f"[Image Not Found: {image_key}]")
+
+# ====================================================
+# [Main Node] 통합 렌더러
+# ====================================================
+def renderer_node(state):
+    print("--- [Node 3] Renderer: PPT 생성 시작 (Hybrid Mode) ---")
+    
+    slides_data = state["slide_data"]   # Planner가 만든 기획안 (List)
+    template_path = state["template_path"]
+    output_path = state["output_path"]
+    image_registry = state.get("image_files", {}) # 이미지 바이너리 저장소
+    
+    if not slides_data:
+        return {"final_message": "❌ 생성할 데이터가 없습니다."}
+
+    # 1. PPT 로드
+    prs = Presentation(template_path)
+
+    # 2. 슬라이드 순차 생성
+    for plan in slides_data:
+        layout_idx = plan["layout_index"]
+        print(f"  📄 Slide 생성 중... (Layout: {layout_idx}, Type: {plan.get('type')})")
+        
+        # 슬라이드 추가
+        slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
+
+        # -------------------------------------------------------------
+        # [PHASE A] Placeholder 채우기 (Static & Dynamic 공통)
+        # -------------------------------------------------------------
+        # Static의 'content_mapping'과 Dynamic의 'common_fields'를 합쳐서 처리
+        fill_data = {}
+        if plan.get("type") == "static":
+            fill_data = plan.get("content_mapping", {})
+        elif plan.get("type") == "dynamic":
+            fill_data = plan.get("common_fields", {})
+
+        # 슬라이드의 모든 Placeholder 순회
+        for shape in slide.placeholders:
+            # 1. 진짜 이름 찾기 (idx 기반)
+            real_name = get_real_placeholder_name(shape)
+            
+            # 2. 제목(Title) 타입은 무조건 "Title"로 통일 (안전장치)
+            if shape.placeholder_format.type == 1: 
+                real_name = "Title"
+            
+            # 3. 데이터 매핑
+            if real_name in fill_data:
+                content = fill_data[real_name]
+                
+                # [이미지 Placeholder인 경우]
+                if hasattr(shape, "insert_picture") and real_name.lower().startswith("image"):
+                    if content in image_registry:
+                        img_stream = io.BytesIO(image_registry[content])
+                        shape.insert_picture(img_stream)
+                        print(f"     ✅ 이미지 삽입: {real_name} -> {content}")
+                    else:
+                        print(f"     ⚠️ 이미지 누락: {content}")
+                
+                # [텍스트 Placeholder인 경우]
+                elif hasattr(shape, "text"):
+                    shape.text = str(content)
+                    print(f"     ✅ 텍스트 채움: {real_name}")
+
+        # -------------------------------------------------------------
+        # [PHASE B] Anchor 위에 그리기 (Dynamic Only)
+        # -------------------------------------------------------------
+        if plan.get("type") == "dynamic":
+            components = plan.get("components", [])
+            
+            # 1. 앵커(Guide) 좌표 수집 
+            # (중요: 슬라이드가 아니라 원본 'layout'에서 찾아야 함)
+            layout = prs.slide_layouts[layout_idx]
+            anchors = {}
+            
+            for shape in layout.shapes:
+                # Placeholder가 아니고, 이름이 Guide_로 시작하는 도형
+                if not shape.is_placeholder and shape.name.startswith("Guide_"):
+                    anchors[shape.name] = (shape.left, shape.top, shape.width, shape.height)
+            
+            # 2. 컴포넌트 그리기
+            for comp in components:
+                target_pos = comp["position"]
+                
+                if target_pos in anchors:
+                    x, y, w, h = anchors[target_pos]
+                    c_type = comp["type"]
+                    
+                    if c_type == "chart":
+                        draw_chart(slide, x, y, w, h, comp.get("data", {}))
+                    elif c_type == "table":
+                        draw_table(slide, x, y, w, h, comp.get("data", []))
+                    elif c_type == "text":
+                        draw_text_box(slide, x, y, w, h, comp.get("content", ""))
+                    elif c_type == "image":
+                        # content 필드에 이미지 키가 들어있다고 가정
+                        draw_dynamic_image(slide, x, y, w, h, comp.get("content"), image_registry)
+                        
+                    print(f"     🎨 컴포넌트 그림: {c_type} @ {target_pos}")
+                else:
+                    print(f"     ❌ 앵커 찾기 실패: {target_pos} (템플릿에 도형이 있는지 확인하세요)")
+
+    # 3. 저장
+    prs.save(output_path)
+    print(f"🎉 저장 완료: {output_path}")
+    
+    return {"final_message": "PPT Generation Complete"}
+
+# (실행부 예시)
+# renderer_node(current_state)
+
+
 
 
