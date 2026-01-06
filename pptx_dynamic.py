@@ -303,4 +303,25 @@ def get_real_placeholder_name(slide_shape):
         return slide_shape.name
 
 
+from pptx import Presentation
+
+def inspect_template(pptx_path):
+    prs = Presentation(pptx_path)
+    print(f"=== 템플릿 분석: {pptx_path} ===\n")
+
+    for i, layout in enumerate(prs.slide_layouts):
+        print(f"📄 [Layout {i}] 이름: {layout.name}")
+        
+        # 레이아웃에 있는 모든 Placeholder 조회
+        for ph in layout.placeholders:
+            # idx: 주민등록번호 (변하지 않음)
+            # name: 우리가 지어준 이름
+            # type: 텍스트인지, 이미지인지, 제목인지
+            print(f"   - [idx: {ph.placeholder_format.idx}] 이름: '{ph.name}' (Type: {ph.placeholder_format.type})")
+        print("-" * 30)
+
+# 실행
+inspect_template("my_template.pptx")
+
+
 
