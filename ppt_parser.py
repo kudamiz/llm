@@ -102,3 +102,83 @@ def extract_images_from_pptx(pptx_path, output_dir):
 
 # --- 실행 ---
 extract_images_from_pptx("example.pptx", "./extracted_images")
+
+import os
+import subprocess
+from pdf2image import convert_from_path
+
+def ppt_to_images_via_libreoffice(ppt_path, output_dir):
+    """
+    LibreOffice를 이용해 PPT를 이미지로 변환하는 함수
+    1. PPT -> PDF (LibreOffice headless 모드 사용)
+    2. PDF -> Images (pdf2image 사용)
+    """
+    
+    # 0. 경로 설정
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    
+    ppt_dir = os.path.dirname(ppt_path)
+    ppt_filename = os.path.basename(ppt_path)
+    pdf_filename = os.path.splitext(ppt_filename)[0] + ".pdf"
+    pdf_path = os.path.join(output_dir, pdf_filename) # PDF도 일단 output_dir에 저장
+
+    print(f"1. PDF 변환 시작: {ppt_filename}...")
+
+    # 1. LibreOffice를 이용해 PDF로 변환 (터미널 명령어 실행)
+    # --headless: 화면 없이 실행
+    # --convert-to pdf: PDF로 변환
+    # --outdir: 저장할 폴더
+    command = [
+        "libreoffice", 
+        "--headless", 
+        "--convert-to", "pdf", 
+        "--outdir", output_dir, 
+        ppt_path
+    ]
+    
+    try:
+        # subprocess로 리눅스 명령어 실행
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        # print(result.stdout.decode()) # 로그 보고 싶으면 주석 해제
+    except subprocess.CalledProcessError as e:
+        print(f"❌ LibreOffice 변환 실패: {e.stderr.decode()}")
+        return []
+
+    if not os.path.exists(pdf_path):
+        print("❌ PDF 파일이 생성되지 않았습니다.")
+        return []
+
+    print("2. 이미지 변환 시작 (PDF -> Images)...")
+
+    # 2. 변환된 PDF를 이미지로 쪼개기
+    try:
+        # dpi=300 : 고화질 설정 (OCR/VLM 인식률 높이려면 300 추천)
+        images = convert_from_path(pdf_path, dpi=300)
+        
+        saved_image_paths = []
+        for i, image in enumerate(images):
+            # 슬라이드 번호는 1부터 시작
+            image_filename = f"slide_{i+1}.jpg"
+            save_path = os.path.join(output_dir, image_filename)
+            
+            image.save(save_path, "JPEG")
+            saved_image_paths.append(save_path)
+            print(f"  - 저장됨: {save_path}")
+            
+        print(f"✅ 변환 완료! 총 {len(saved_image_paths)}장")
+        
+        # (선택) 중간에 만든 PDF는 삭제하고 싶다면:
+        # os.remove(pdf_path)
+        
+        return saved_image_paths
+
+    except Exception as e:
+        print(f"❌ 이미지 변환 실패: {e}")
+        return []
+
+# --- 실행 예시 ---
+# ppt_file = "./data/defect_report.pptx"
+# output_folder = "./extracted_images/report_01"
+
+# images = ppt_to_images_via_libreoffice(ppt_file, output_folder)
