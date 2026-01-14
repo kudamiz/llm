@@ -1,4 +1,4 @@
-8from unstructured.partition.pptx import partition_pptx
+from unstructured.partition.pptx import partition_pptx
 import os
 
 # 1. 경로 설정
