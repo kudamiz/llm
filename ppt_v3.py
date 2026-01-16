@@ -1,0 +1,387 @@
+import io
+import os
+from typing import List, Dict, Any, Literal, Optional, TypedDict, Union
+from pptx import Presentation
+from pptx.util import Inches, Pt
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+from langgraph.graph import StateGraph, END
+
+# ====================================================
+# [Config] 템플릿 레지스트리 (Hybrid 규칙 정의)
+# ====================================================
+# Scanner가 1차적으로 참고하되, 실제 파일의 Anchor도 함께 읽습니다.
+TEMPLATE_REGISTRY = {
+    "Title_Slide": {
+        "type": "static",
+        "desc": "표지 슬라이드",
+        "rules": {"Title": "20자 이내, 임팩트 있게", "Subtitle": "날짜/발표자 포함"}
+    },
+    "Content_List": {
+        "type": "static",
+        "desc": "목차 및 아젠다",
+        "rules": {"Content": "개조식으로 요약"}
+    },
+    "Dynamic_Split": {
+        "type": "dynamic",
+        "desc": "좌우 비교 및 분석 (차트/텍스트 혼합)",
+        "rules": {"Guide_Left": "차트 배치 추천", "Guide_Right": "핵심 요약 텍스트"}
+    },
+    "Dynamic_Full": {
+        "type": "dynamic",
+        "desc": "대형 데이터 시각화",
+        "rules": {"Guide_Main": "복잡한 표나 큰 차트"}
+    }
+}
+
+# ====================================================
+# [Helper 1] 서식 보존 텍스트 교체 (Run-Level) - NEW!
+# ====================================================
+def fill_placeholder_preserving_style(shape, new_text):
+    """
+    기존 텍스트의 폰트/색상/크기를 최대한 유지하며 내용을 교체합니다.
+    첫 번째 문단의 첫 번째 Run 스타일을 복사하여 적용합니다.
+    """
+    if not shape.has_text_frame:
+        return
+    
+    text_frame = shape.text_frame
+    if not text_frame.paragraphs:
+        text_frame.text = new_text # 문단 없으면 그냥 넣음
+        return
+
+    # 첫 번째 문단의 첫 번째 런(Run) 스타일 가져오기
+    p = text_frame.paragraphs[0]
+    if p.runs:
+        r = p.runs[0]
+        font_name = r.font.name
+        font_size = r.font.size
+        font_bold = r.font.bold
+        font_color = r.font.color.rgb if hasattr(r.font.color, 'rgb') else None
+    else:
+        # 런이 없으면 그냥 텍스트 교체
+        text_frame.text = new_text
+        return
+
+    # 텍스트 교체 (기존 내용 싹 지우고 새로 씀)
+    text_frame.clear() 
+    new_p = text_frame.paragraphs[0]
+    new_run = new_p.add_run()
+    new_run.text = new_text
+
+    # 스타일 복원
+    if font_name: new_run.font.name = font_name
+    if font_size: new_run.font.size = font_size
+    if font_bold is not None: new_run.font.bold = font_bold
+    if font_color: new_run.font.color.rgb = font_color
+
+# ====================================================
+# [Helper 2] Placeholder 이름 역추적
+# ====================================================
+def get_real_ph_name(shape):
+    try:
+        idx = shape.placeholder_format.idx
+        layout = shape.part.slide_layout
+        for ph in layout.placeholders:
+            if ph.placeholder_format.idx == idx:
+                return ph.name
+        return shape.name
+    except:
+        return shape.name
+
+# ====================================================
+# [Helper 3] Dynamic Drawing Tools
+# ====================================================
+def draw_chart(slide, x, y, w, h, data):
+    chart_data = CategoryChartData()
+    chart_data.categories = data.get('labels', [])
+    chart_data.add_series('Series 1', data.get('values', []))
+    chart = slide.shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, w, h, chart_data
+    ).chart
+    if data.get('title'):
+        chart.chart_title.text_frame.text = data['title']
+
+def draw_table(slide, x, y, w, h, rows):
+    if not rows: return
+    r_cnt, c_cnt = len(rows), len(rows[0])
+    table = slide.shapes.add_table(r_cnt, c_cnt, x, y, w, h).table
+    for r in range(r_cnt):
+        for c in range(c_cnt):
+            table.cell(r, c).text = str(rows[r][c])
+
+def draw_text_box(slide, x, y, w, h, text):
+    tb = slide.shapes.add_textbox(x, y, w, h)
+    tb.text_frame.text = text
+    tb.text_frame.word_wrap = True
+
+
+
+
+# [State] 그래프 전체에서 공유할 메모리
+class AgentState(TypedDict):
+    user_query: str           # 사용자 요청
+    template_path: str        # PPTX 경로
+    output_path: str          # 저장 경로
+    
+    template_summary: str     # Node 2용 (간략 가이드)
+    template_details: str     # Node 3용 (상세 규칙)
+    
+    skeleton_plan: List[dict] # Node 2 결과 (뼈대)
+    slide_data: List[dict]    # Node 3 결과 (최종 데이터)
+    
+    # Reviewer Loop용
+    review_status: str        # PASS / FAIL
+    review_feedback: str      # 피드백 내용
+    retry_count: int          # 재시도 횟수
+
+# [Schema 1] Structure Node용
+class SlideSkeleton(BaseModel):
+    layout_index: int
+    slide_type: Literal["static", "dynamic"]
+    topic: str
+
+class Storyboard(BaseModel):
+    plan: List[SlideSkeleton]
+
+# [Schema 2] Content Node용 (유니버설 데이터 모델)
+class ComponentData(BaseModel):
+    text_content: Optional[str] = None
+    table_rows: Optional[List[List[str]]] = None
+    chart_labels: Optional[List[str]] = None
+    chart_values: Optional[List[float]] = None
+    chart_title: Optional[str] = None
+
+class SlideComponent(BaseModel):
+    type: Literal["text", "table", "chart", "image"]
+    position: str
+    data: ComponentData
+
+class SlideContent(BaseModel):
+    type: Literal["static", "dynamic"]
+    layout_index: int
+    # Static & Dynamic 공통 (제목 등)
+    common_fields: Dict[str, str] = Field(default_factory=dict)
+    # Dynamic 전용
+    components: List[SlideComponent] = Field(default_factory=list)
+
+class PresentationPlan(BaseModel):
+    slides: List[SlideContent]
+
+# [Schema 3] Reviewer Node용
+class ReviewResult(BaseModel):
+    status: Literal["PASS", "FAIL"]
+    feedback: str
+
+
+def scanner_node(state: AgentState):
+    prs = Presentation(state["template_path"])
+    summary_lines = []
+    detail_lines = []
+
+    for i, layout in enumerate(prs.slide_layouts):
+        name = layout.name
+        
+        # 레지스트리에 없으면 기본값 처리 (Hybrid)
+        config = TEMPLATE_REGISTRY.get(name, {"type": "static", "desc": "일반 레이아웃", "rules": {}})
+        
+        # 1. Summary (Structure용)
+        summary_lines.append(f"[Index {i}] {name} ({config['type']}) : {config['desc']}")
+        
+        # 2. Details (Content용)
+        info = f"\n[Layout {i}] {name} ({config['type']})"
+        rules = config.get("rules", {})
+        
+        # (A) Static Placeholders
+        ph_names = [get_real_ph_name(ph) for ph in layout.placeholders]
+        if ph_names:
+            info += f"\n   - 입력칸: {', '.join(ph_names)}"
+            
+        # (B) Dynamic Anchors (실제 파일 조회)
+        anchors = [s.name for s in layout.shapes if s.name.startswith("Guide_")]
+        if anchors:
+            info += f"\n   - 앵커: {', '.join(anchors)}"
+            
+        # (C) 규칙 매핑
+        info += "\n   - 작성 규칙:"
+        for key, rule in rules.items():
+            info += f"\n     * {key}: {rule}"
+            
+        detail_lines.append(info)
+
+    return {
+        "template_summary": "\n".join(summary_lines),
+        "template_details": "\n".join(detail_lines),
+        "retry_count": 0, # 초기화
+        "review_feedback": ""
+    }
+
+
+def structure_node(state: AgentState):
+    print("--- [Node 2] Structure: 스토리보드 기획 ---")
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    structured_llm = llm.with_structured_output(Storyboard)
+    
+    prompt = f"""
+    사용자 요청: {state['user_query']}
+    
+    [템플릿 목록]
+    {state['template_summary']}
+    
+    위 템플릿을 활용해 논리적인 슬라이드 목차를 기획하세요.
+    """
+    res = structured_llm.invoke(prompt)
+    return {"skeleton_plan": [s.model_dump() for s in res.plan]}
+
+
+
+def content_node(state: AgentState):
+    print(f"--- [Node 3] Content: 내용 작성 (Retry: {state['retry_count']}) ---")
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    structured_llm = llm.with_structured_output(PresentationPlan)
+    
+    skeletons = state["skeleton_plan"]
+    details = state["template_details"]
+    feedback = state["review_feedback"]
+    
+    system_prompt = f"""
+    당신은 PPT 콘텐츠 작가입니다.
+    기획안에 따라 각 슬라이드의 데이터를 작성하세요.
+    
+    [기획안]
+    {skeletons}
+    
+    [템플릿 상세 규칙 (준수 필수)]
+    {details}
+    """
+    
+    if feedback and feedback != "Good":
+        system_prompt += f"\n\n🚨 [수정 요청] 이전 작성 내용에 문제가 있습니다:\n{feedback}\n이 지적사항을 반영해 처음부터 다시 작성하세요."
+
+    res = structured_llm.invoke(system_prompt)
+    
+    # Pydantic -> Dict 변환
+    return {"slide_data": [s.model_dump() for s in res.slides]}
+
+
+def reviewer_node(state: AgentState):
+    print("--- [Node 4] Reviewer: 품질 검수 ---")
+    
+    # 3회 이상 실패 시 강제 통과
+    if state["retry_count"] >= 3:
+        print("   ⚠️ 재시도 횟수 초과 -> 강제 PASS")
+        return {"review_status": "PASS", "review_feedback": "Max retries"}
+
+    llm = ChatOpenAI(model="gpt-4o", temperature=0)
+    structured_llm = llm.with_structured_output(ReviewResult)
+    
+    prompt = f"""
+    [검수 기준]
+    {state['template_details']}
+    
+    [작성된 데이터]
+    {state['slide_data']}
+    
+    위 데이터가 규칙을 준수했는지 검사하세요.
+    - 글자 수 제한, 필수 데이터(labels, values) 누락 여부 확인.
+    - 문제가 있으면 FAIL과 피드백을, 없으면 PASS를 반환하세요.
+    """
+    
+    res = structured_llm.invoke(prompt)
+    print(f"   ⚖️ 판정: {res.status}")
+    
+    return {
+        "review_status": res.status,
+        "review_feedback": res.feedback,
+        "retry_count": state["retry_count"] + 1
+    }
+
+
+def renderer_node(state: AgentState):
+    print("--- [Node 5] Renderer: 파일 생성 ---")
+    prs = Presentation(state["template_path"])
+    
+    for plan in state["slide_data"]:
+        layout_idx = plan["layout_index"]
+        slide = prs.slides.add_slide(prs.slide_layouts[layout_idx])
+        
+        # [A] Static & Common Fields (서식 보존 교체)
+        common = plan.get("common_fields", {})
+        for shape in slide.placeholders:
+            real_name = get_real_ph_name(shape)
+            if shape.placeholder_format.type == 1: real_name = "Title" # 제목 강제 매핑
+            
+            if real_name in common:
+                # NEW: 스타일 유지하며 교체 함수 사용
+                fill_placeholder_preserving_style(shape, common[real_name])
+                
+        # [B] Dynamic Components
+        if plan["type"] == "dynamic":
+            layout = prs.slide_layouts[layout_idx]
+            # 앵커 찾기 (Layout에서 조회)
+            anchors = {s.name: (s.left, s.top, s.width, s.height) 
+                       for s in layout.shapes if s.name.startswith("Guide_")}
+            
+            for comp in plan.get("components", []):
+                pos = comp["position"]
+                data = comp["data"]
+                
+                if pos in anchors:
+                    x, y, w, h = anchors[pos]
+                    c_type = comp["type"]
+                    
+                    if c_type == "text":
+                        draw_text_box(slide, x, y, w, h, data["text_content"])
+                    elif c_type == "table":
+                        draw_table(slide, x, y, w, h, data["table_rows"])
+                    elif c_type == "chart":
+                        chart_d = {
+                            "labels": data["chart_labels"],
+                            "values": data["chart_values"],
+                            "title": data["chart_title"]
+                        }
+                        draw_chart(slide, x, y, w, h, chart_d)
+                        
+    prs.save(state["output_path"])
+    print(f"🎉 생성 완료: {state['output_path']}")
+    return {"output_path": state["output_path"]}
+
+
+def route_after_review(state: AgentState):
+    if state["review_status"] == "FAIL":
+        return "content" # 재작성
+    return "renderer"    # 통과
+
+workflow = StateGraph(AgentState)
+
+# 노드 등록
+workflow.add_node("scanner", scanner_node)
+workflow.add_node("structure", structure_node)
+workflow.add_node("content", content_node)
+workflow.add_node("reviewer", reviewer_node)
+workflow.add_node("renderer", renderer_node)
+
+# 흐름 연결
+workflow.set_entry_point("scanner")
+workflow.add_edge("scanner", "structure")
+workflow.add_edge("structure", "content")
+workflow.add_edge("content", "reviewer")
+
+# 조건부 연결 (Loop)
+workflow.add_conditional_edges(
+    "reviewer",
+    route_after_review,
+    {
+        "content": "content",
+        "renderer": "renderer"
+    }
+)
+
+workflow.add_edge("renderer", END)
+
+# 컴파일
+app = workflow.compile()
+
+
