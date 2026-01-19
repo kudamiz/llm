@@ -385,3 +385,94 @@ workflow.add_edge("renderer", END)
 app = workflow.compile()
 
 
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE
+from pptx.util import Pt
+
+# [Helper] 더러운 데이터를 숫자로 씻어주는 함수
+def sanitize_number(value):
+    if isinstance(value, (int, float)):
+        return value
+    try:
+        # "1,000" -> 1000.0, "10%" -> 10.0 처리 등을 여기서 함
+        clean_str = str(value).replace(",", "").replace("%", "").strip()
+        return float(clean_str)
+    except:
+        return 0.0 # 정 안되면 0으로 처리
+
+def draw_chart_safe(slide, x, y, w, h, data_dict):
+    try:
+        # 1. 데이터 꺼내기 (Pydantic 모델이 dict로 변환되어 들어옴)
+        labels = data_dict.get("chart_labels", []) or []
+        raw_values = data_dict.get("chart_values", []) or []
+        title = data_dict.get("chart_title", "")
+
+        # 2. 데이터 유효성 검사 (데이터 없으면 그리기 중단)
+        if not labels or not raw_values:
+            print(f"   ⚠️ 차트 데이터 누락 (Labels: {len(labels)}, Values: {len(raw_values)})")
+            return
+
+        # 3. 값(Values) 안전하게 숫자로 변환
+        values = [sanitize_number(v) for v in raw_values]
+
+        # 4. [중요] X축과 Y축 개수 맞추기 (짧은 쪽에 맞춤)
+        min_len = min(len(labels), len(values))
+        labels = labels[:min_len]
+        values = values[:min_len]
+
+        # 5. 차트 데이터 객체 생성
+        chart_data = CategoryChartData()
+        chart_data.categories = labels
+        chart_data.add_series(title or "Series 1", values)
+
+        # 6. PPT에 삽입
+        chart = slide.shapes.add_chart(
+            XL_CHART_TYPE.COLUMN_CLUSTERED, x, y, w, h, chart_data
+        ).chart
+
+        # 7. 제목 설정
+        if title:
+            chart.chart_title.text_frame.text = title
+            
+        print("   ✅ 차트 생성 성공")
+
+    except Exception as e:
+        print(f"   ❌ 차트 렌더링 에러: {e}")
+        # 실패 시 빈 자리에 에러 메시지라도 남겨둠 (디버깅용)
+        tb = slide.shapes.add_textbox(x, y, w, h)
+        tb.text_frame.text = f"[Chart Error]\n{str(e)}"
+
+def draw_table_safe(slide, x, y, w, h, data_dict):
+    try:
+        rows = data_dict.get("table_rows", [])
+        if not rows: return
+
+        # 행/열 개수 계산
+        r_cnt = len(rows)
+        c_cnt = max(len(r) for r in rows) if r_cnt > 0 else 0
+        
+        if r_cnt == 0 or c_cnt == 0: return
+
+        # 테이블 생성
+        graphic_frame = slide.shapes.add_table(r_cnt, c_cnt, x, y, w, h)
+        table = graphic_frame.table
+
+        # 셀 채우기
+        for i, row_data in enumerate(rows):
+            for j, cell_val in enumerate(row_data):
+                # 데이터가 짧아서 인덱스 에러나는 것 방지
+                if j >= c_cnt: break 
+                
+                cell = table.cell(i, j)
+                cell.text = str(cell_val)
+                # (옵션) 폰트 사이즈 조정
+                cell.text_frame.paragraphs[0].font.size = Pt(12)
+        
+        print("   ✅ 테이블 생성 성공")
+        
+    except Exception as e:
+        print(f"   ❌ 테이블 렌더링 에러: {e}")
+        tb = slide.shapes.add_textbox(x, y, w, h)
+        tb.text_frame.text = f"[Table Error]\n{str(e)}"
+
+
