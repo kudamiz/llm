@@ -562,3 +562,123 @@ def draw_table_safe(slide, x, y, w, h, data_dict):
         print(f"   ❌ 테이블 렌더링 에러: {e}")
 
 
+def replace_text_preserving_style(shape, new_text):
+    """
+    [핵심 기능]
+    기존 텍스트 상자의 폰트, 색상, 크기, 볼드체 등을 그대로 유지하면서
+    글자 내용만 'new_text'로 싹 바꿔치기합니다.
+    """
+    if not shape.has_text_frame: 
+        return
+    
+    tf = shape.text_frame
+    # 기존에 글자가 없으면 그냥 넣고 끝냄
+    if not tf.paragraphs:
+        tf.text = new_text
+        return
+
+    # 1. 첫 번째 문단의 첫 번째 스타일(Run)을 '샘플'로 복사
+    p = tf.paragraphs[0]
+    sample_run = p.runs[0] if p.runs else None
+    
+    # 스타일 백업
+    font_name = sample_run.font.name if sample_run else None
+    font_size = sample_run.font.size if sample_run else None
+    font_color = sample_run.font.color.rgb if (sample_run and hasattr(sample_run.font.color, 'rgb')) else None
+    is_bold = sample_run.font.bold if sample_run else None
+
+    # 2. 내용 교체 (기존 것 다 지움)
+    tf.clear() 
+  
+
+from pptx.enum.shapes import PP_PLACEHOLDER
+
+def smart_fill_placeholders(slide, data_dict):
+    """
+    data_dict: {"Title": "...", "Subtitle": "...", "Content": "..."}
+    """
+    # 에이전트가 준 키들을 전부 소문자로 바꿔서 검색하기 쉽게 만듦
+    # 예: {"title": "...", "main_title": "..."}
+    normalized_data = {k.lower(): v for k, v in data_dict.items()}
+
+    for shape in slide.placeholders:
+        # 1. 실제 PPT의 Placeholder 정보 확인
+        ph_type = shape.placeholder_format.type
+        ph_name = shape.name.lower()
+        
+        target_text = None
+
+        # --- [매칭 로직 1] 타입(Type)으로 찾기 (가장 정확함) ---
+        # (1) 제목 칸 (CENTER_TITLE or TITLE)
+        if ph_type == PP_PLACEHOLDER.CENTER_TITLE or ph_type == PP_PLACEHOLDER.TITLE:
+            # 에이전트가 title, main_title, subject 중 하나라도 보냈으면 씀
+            target_text = normalized_data.get("title") or normalized_data.get("main_title") or normalized_data.get("subject")
+
+        # (2) 부제목 칸 (SUBTITLE)
+        elif ph_type == PP_PLACEHOLDER.SUBTITLE:
+            target_text = normalized_data.get("subtitle") or normalized_data.get("sub_title")
+
+        # (3) 본문/바디 칸 (BODY or OBJECT)
+        elif ph_type == PP_PLACEHOLDER.BODY or ph_type == PP_PLACEHOLDER.OBJECT:
+            # content, body, description 중 하나라도 보냈으면 씀
+            target_text = normalized_data.get("content") or normalized_data.get("body") or normalized_data.get("desc")
+
+        # (4) 날짜 (DATE)
+        elif ph_type == PP_PLACEHOLDER.DATE:
+            target_text = normalized_data.get("date")
+
+        # (5) 쪽번호 (SLIDE_NUMBER) -> 보통 자동이지만 강제 입력 원할 때
+        elif ph_type == PP_PLACEHOLDER.SLIDE_NUMBER:
+            target_text = normalized_data.get("page_no")
+
+        # --- [매칭 로직 2] 이름(Name)으로 찾기 (타입 매칭 실패 시) ---
+        if not target_text:
+            # PPT 이름이 "Content Placeholder 2"라면 -> "content"라는 키가 있는지 확인
+            for key, val in normalized_data.items():
+                if key in ph_name: # 부분 일치 검색
+                    target_text = val
+                    break
+        
+        # 2. 찾았으면 갈아끼우기 (여기서 replace 함수 사용!)
+        if target_text:
+            replace_text_preserving_style(shape, target_text)
+            print(f"   ✅ Placeholder 채움: {shape.name} <- '{target_text[:10]}...'")
+        else:
+            # 디버깅용 로그: 왜 안 들어갔는지 확인 가능
+            print(f"   ⚠️ 매칭 실패: PPT칸({shape.name}/{ph_type}) vs 데이터키({list(normalized_data.keys())})")
+
+
+def renderer_node(state: AgentState):
+    # ... (상단 생략) ...
+    
+    for plan in state["slide_data"]:
+        # ... (슬라이드 생성) ...
+        
+        # [기존 코드 삭제]
+        # common = plan.get("common_fields", {})
+        # for shape in slide.placeholders:
+        #     ... (복잡했던 if/else 로직) ...
+
+        # [NEW: 한 줄로 끝내기]
+        # 1. 공통 필드(제목, 본문 등) 채우기
+        common_data = plan.get("common_fields", {})
+        smart_fill_placeholders(slide, common_data)
+        
+        # 2. Dynamic Components 그리기 (차트 등)
+        # ... (이건 기존 유지) ...
+  
+    # 3. 새 내용 넣고 스타일 복원 (수술 완료)
+    new_p = tf.paragraphs[0]
+    new_run = new_p.add_run()
+    new_run.text = str(new_text) # 안전하게 문자열 변환
+
+    if sample_run:
+        if font_name: new_run.font.name = font_name
+        if font_size: new_run.font.size = font_size
+        if font_color: new_run.font.color.rgb = font_color
+        if is_bold is not None: new_run.font.bold = is_bold
+
+
+
+
+
