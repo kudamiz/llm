@@ -476,3 +476,89 @@ def draw_table_safe(slide, x, y, w, h, data_dict):
         tb.text_frame.text = f"[Table Error]\n{str(e)}"
 
 
+# renderer.py (또는 헬퍼 함수 정의 부분)
+
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+
+# [Config] 차트 타입 매핑 사전
+CHART_TYPE_MAP = {
+    "bar": XL_CHART_TYPE.COLUMN_CLUSTERED,
+    "line": XL_CHART_TYPE.LINE,
+    "pie": XL_CHART_TYPE.PIE,
+    "doughnut": XL_CHART_TYPE.DOUGHNUT,
+    "area": XL_CHART_TYPE.AREA
+}
+
+# [Config] 테이블 스타일 ID 매핑 (PPT 내부 GUID)
+# 자주 쓰는 스타일 몇 개만 매핑해두면 편합니다.
+TABLE_STYLE_MAP = {
+    "light": "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}",   # Medium Style 2 - Accent 1
+    "medium": "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}",  # (위와 동일, 취향껏 변경 가능)
+    "dark": "{2D5ABB26-0587-4C30-8999-92F81FD0307C}",    # Themed Style 1 - Accent 1
+    "accent": "{3C2FFA5D-87B4-456A-9821-1D502468CF0F}"   # Medium Style 4 - Accent 1
+}
+
+def draw_chart_safe(slide, x, y, w, h, data_dict):
+    try:
+        # 1. 데이터 파싱 (기존 로직 동일)
+        labels = data_dict.get("chart_labels", []) or []
+        raw_values = data_dict.get("chart_values", []) or []
+        title = data_dict.get("chart_title", "")
+        # [NEW] 차트 타입 가져오기
+        c_type_str = data_dict.get("chart_type", "bar").lower()
+        
+        # ... (중간 데이터 정제 로직 sanitize_number 등은 기존 유지) ...
+        values = [sanitize_number(v) for v in raw_values] # (예시)
+
+        # 2. 차트 데이터 객체 생성
+        chart_data = CategoryChartData()
+        chart_data.categories = labels
+        chart_data.add_series(title or "Series 1", values)
+
+        # 3. [NEW] 선택된 차트 타입으로 그리기
+        ppt_chart_type = CHART_TYPE_MAP.get(c_type_str, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        
+        chart = slide.shapes.add_chart(
+            ppt_chart_type, x, y, w, h, chart_data
+        ).chart
+
+        # 4. 옵션: 차트 종류별 미세 조정 (예: 원형 차트는 범례가 중요)
+        if c_type_str in ["pie", "doughnut"]:
+            chart.has_legend = True
+            chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+
+        # 5. 제목 설정
+        if title:
+            chart.chart_title.text_frame.text = title
+            
+        print(f"   ✅ 차트 생성 성공 ({c_type_str})")
+
+    except Exception as e:
+        print(f"   ❌ 차트 렌더링 에러: {e}")
+        # ... (에러 처리 로직) ...
+
+def draw_table_safe(slide, x, y, w, h, data_dict):
+    try:
+        rows = data_dict.get("table_rows", [])
+        # [NEW] 스타일 가져오기
+        style_key = data_dict.get("table_style", "medium") 
+        
+        if not rows: return
+        r_cnt, c_cnt = len(rows), len(rows[0])
+
+        graphic_frame = slide.shapes.add_table(r_cnt, c_cnt, x, y, w, h)
+        table = graphic_frame.table
+
+        # [NEW] 테이블 스타일 적용
+        # python-pptx는 table_style_id에 GUID 문자열을 넣어야 합니다.
+        target_style_id = TABLE_STYLE_MAP.get(style_key, TABLE_STYLE_MAP["medium"])
+        table.table_style_id = target_style_id
+
+        # ... (셀 채우기 로직 기존 유지) ...
+        
+        print(f"   ✅ 테이블 생성 성공 (Style: {style_key})")
+        
+    except Exception as e:
+        print(f"   ❌ 테이블 렌더링 에러: {e}")
+
+
