@@ -770,5 +770,102 @@ def draw_table_advanced(slide, x, y, w, h, data_dict):
         print(f"   ❌ 테이블 렌더링 에러: {e}")
 
 
+# schema.py
+
+from typing import List, Optional, Literal
+from pydantic import BaseModel, Field
+
+# [NEW] 1. 하위 모델 정의: 하나의 데이터 시리즈 (예: '2023년 매출'과 그 값들)
+class ChartSeries(BaseModel):
+    name: str = Field(..., description="범례(Legend)에 표시될 시리즈 이름 (예: '영업이익', '순이익')")
+    values: List[float] = Field(..., description="해당 시리즈의 데이터 값 리스트 (숫자만)")
+
+# 2. 메인 데이터 모델 수정
+class ComponentData(BaseModel):
+    # ... (text_content, table 관련 필드 유지) ...
+
+    chart_title: Optional[str] = Field(None, description="차트 제목")
+    chart_labels: Optional[List[str]] = Field(None, description="X축 라벨 리스트 (모든 시리즈 공통)")
+    
+    # 🚨 [핵심 수정] 기존 chart_values 필드를 삭제하고 아래로 대체
+    chart_series: Optional[List[ChartSeries]] = Field(
+        None, 
+        description="다중 시리즈 데이터. 꺾은선 2개 이상, 묶은 세로 막대형 등 복합 차트 구현 시 사용."
+    )
+    
+    chart_type: Literal["bar", "line", "pie", "doughnut", "area"] = Field(
+        "bar", 
+        description="차트 종류 (bar: 묶은 세로 막대, line: 꺾은선)"
+    )
+
+
+# renderer.py
+
+from pptx.chart.data import CategoryChartData
+from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+
+# (CHART_TYPE_MAP, sanitize_number 함수는 기존과 동일하다고 가정)
+
+def draw_chart_advanced(slide, x, y, w, h, data_dict):
+    try:
+        # 1. 공통 데이터 추출
+        title = data_dict.get("chart_title", "")
+        labels = data_dict.get("chart_labels", []) or []
+        c_type_str = data_dict.get("chart_type", "bar").lower()
+        
+        # 🚨 [핵심 1] 다중 시리즈 데이터 추출 (Pydantic 모델 -> dict 리스트로 변환됨)
+        raw_series_list = data_dict.get("chart_series", []) or []
+
+        # 데이터 유효성 검사
+        if not labels or not raw_series_list:
+            print("   ⚠️ 차트 데이터 누락 (Labels 또는 Series 없음)")
+            return
+
+        # 2. 차트 데이터 객체 생성 및 라벨 설정
+        chart_data = CategoryChartData()
+        chart_data.categories = labels
+        
+        # 🚨 [핵심 2] 반복문을 돌며 시리즈 추가 (Multi-Series Logic)
+        label_len = len(labels)
+        for series in raw_series_list:
+            s_name = series.get("name", "Series")
+            s_values_raw = series.get("values", [])
+            
+            # 값 정제 (숫자 변환)
+            s_values_clean = [sanitize_number(v) for v in s_values_raw]
+            
+            # 길이 맞춤 (라벨 개수만큼 잘라내기)
+            s_values_final = s_values_clean[:label_len]
+            
+            # 데이터 추가
+            chart_data.add_series(s_name, s_values_final)
+            print(f"      + 시리즈 추가: {s_name} (데이터 {len(s_values_final)}개)")
+
+        # 3. 차트 생성
+        ppt_chart_type = CHART_TYPE_MAP.get(c_type_str, XL_CHART_TYPE.COLUMN_CLUSTERED)
+        chart = slide.shapes.add_chart(
+            ppt_chart_type, x, y, w, h, chart_data
+        ).chart
+
+        # 4. 제목 및 범례(Legend) 설정
+        if title:
+            chart.chart_title.text_frame.text = title
+        
+        # 시리즈가 2개 이상이거나 파이 차트면 범례 표시
+        if len(raw_series_list) > 1 or c_type_str in ["pie", "doughnut"]:
+            chart.has_legend = True
+            chart.legend.position = XL_LEGEND_POSITION.BOTTOM
+
+        print(f"   ✅ 고도화된 차트 생성 성공 ({c_type_str}, 시리즈 {len(raw_series_list)}개)")
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"   ❌ 차트 렌더링 에러: {e}")
+        # (에러 시 텍스트 박스 대체 로직 유지)
+
+
+
+
 
 
