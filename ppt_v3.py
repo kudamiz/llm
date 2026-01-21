@@ -865,6 +865,24 @@ def draw_chart_advanced(slide, x, y, w, h, data_dict):
         # (에러 시 텍스트 박스 대체 로직 유지)
 
 
+system_prompt = """
+(전략)
+
+[차트 작성 규칙 (고도화)]
+1. `chart_labels`: X축에 들어갈 라벨을 리스트로 정의합니다. (예: ["1Q", "2Q", "3Q", "4Q"])
+2. `chart_series`: 실제 데이터 값들을 정의합니다. 이 필드는 **리스트 안에 객체**가 들어가는 구조입니다.
+
+   **작성 예시 (매출과 이익 비교 꺾은선 차트):**
+   ```json
+   "chart_type": "line",
+   "chart_labels": ["2021", "2022", "2023"],
+   "chart_series": [
+       {"name": "매출액", "values": [100, 120, 150]},
+       {"name": "영업이익", "values": [30, 40, 50]}
+   ]
+
+
+
 
 
 
