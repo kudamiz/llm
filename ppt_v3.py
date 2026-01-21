@@ -679,6 +679,96 @@ def renderer_node(state: AgentState):
         if is_bold is not None: new_run.font.bold = is_bold
 
 
+# renderer.py 내부 혹은 utils.py
+
+from pptx.util import Pt
+from pptx.enum.text import PP_ALIGN, MSO_ANCHOR
+from pptx.dml.color import RGBColor
+
+def hex_to_rgb(hex_str):
+    """ 'FFFFFF' -> RGBColor(255, 255, 255) 변환 """
+    if not hex_str or len(hex_str) != 6: return None
+    return RGBColor(int(hex_str[:2], 16), int(hex_str[2:4], 16), int(hex_str[4:], 16))
+
+def draw_table_advanced(slide, x, y, w, h, data_dict):
+    try:
+        rows = data_dict.get("table_rows", [])
+        if not rows: return
+
+        r_cnt = len(rows)
+        c_cnt = max(len(r) for r in rows) if r_cnt > 0 else 0
+        if r_cnt == 0 or c_cnt == 0: return
+
+        # 1. 테이블 생성
+        graphic_frame = slide.shapes.add_table(r_cnt, c_cnt, x, y, w, h)
+        table = graphic_frame.table
+
+        # [핵심 1] 행 높이 강제 배분 (Bounding Box 준수)
+        # 전체 높이 h를 행 개수로 나누어 할당
+        row_height = h / r_cnt
+        for row in table.rows:
+            row.height = int(row_height)
+
+        # [핵심 2] 폰트 크기 자동 계산 (Auto-Sizing Logic)
+        # 사용자가 지정했으면 그거 쓰고, 아니면 행 개수에 따라 작게 조절
+        user_font_size = data_dict.get("table_font_size")
+        
+        if user_font_size:
+            final_font_size = Pt(user_font_size)
+        else:
+            # 휴리스틱: 행이 10개 넘으면 10pt, 5개 넘으면 12pt, 아니면 14pt
+            if r_cnt > 15: final_font_size = Pt(9)
+            elif r_cnt > 10: final_font_size = Pt(10)
+            elif r_cnt > 5: final_font_size = Pt(12)
+            else: final_font_size = Pt(14)
+
+        # 3. 셀 데이터 채우기 및 스타일 적용
+        for i, row_data in enumerate(rows):
+            for j, cell_val in enumerate(row_data):
+                if j >= len(table.columns): break
+                
+                cell = table.cell(i, j)
+                
+                # 텍스트가 셀을 넘치지 않게 여백 줄이기 (선택사항)
+                cell.margin_left = Pt(2)
+                cell.margin_right = Pt(2)
+                cell.margin_top = Pt(1)
+                cell.margin_bottom = Pt(1)
+                
+                # 수직 정렬 (중앙)
+                cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+                
+                # 텍스트 입력
+                # (기존 텍스트 프레임 초기화 후 입력해야 서식 적용이 깔끔함)
+                cell.text_frame.clear()
+                p = cell.text_frame.paragraphs[0]
+                run = p.add_run()
+                run.text = str(cell_val)
+                
+                # [폰트 적용]
+                run.font.size = final_font_size
+                run.font.name = "맑은 고딕" # 또는 "Arial" 등 원하는 폰트
+                
+                # (옵션) 헤더(첫 줄) 스타일링
+                if i == 0:
+                    run.font.bold = True
+                    # 사용자 지정 헤더 색상
+                    header_color = data_dict.get("table_header_color")
+                    if header_color:
+                        try:
+                            cell.fill.solid()
+                            cell.fill.fore_color.rgb = hex_to_rgb(header_color)
+                        except: pass # 색상 코드 오류 시 무시
+
+        # [NEW] 스타일 ID 적용 (배경색 등 기본 테마)
+        style_key = data_dict.get("table_style", "medium")
+        # table.table_style_id = TABLE_STYLE_MAP.get(...) # (이전 단계 코드 활용)
+        
+        print(f"   ✅ 테이블 생성 (Rows: {r_cnt}, FontSize: {final_font_size.pt}pt)")
+
+    except Exception as e:
+        print(f"   ❌ 테이블 렌더링 에러: {e}")
+
 
 
 
