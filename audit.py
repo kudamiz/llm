@@ -179,3 +179,55 @@ def find_qna_coordinates(file_path, sheet_name):
 
 # --- 실행 예시 ---
 # coords = find_qna_coordinates("customer_questions.xlsx", "Sheet1")
+
+
+import openpyxl
+import json
+import openai
+from openpyxl.utils import get_column_letter  # ⭐️ 추가해야 할 모듈
+
+# ... [이전 코드 생략] ...
+
+def find_qna_coordinates(file_path, sheet_name):
+    print(f"[{sheet_name}] 시트 좌표 탐색 시작...")
+    
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    ws = wb[sheet_name]
+
+    sample_grid = []
+    
+    for row in ws.iter_rows(min_row=1, max_row=50, min_col=1, max_col=10):
+        row_data = {}
+        has_value = False
+        current_row_number = None
+        
+        # enumerate를 사용해 1번부터 시작하는 컬럼 인덱스를 직접 가져옵니다.
+        for col_idx, cell in enumerate(row, start=1):
+            
+            # 1. 컬럼 알파벳 안전하게 추출 (MergedCell 에러 원천 차단)
+            col_letter = get_column_letter(col_idx)
+            
+            # 행 번호 기록 (첫 번째 셀에서 한 번만 가져옵니다)
+            if current_row_number is None:
+                current_row_number = getattr(cell, 'row', row[0].row)
+            
+            # 2. 값(Value) 안전하게 추출
+            # MergedCell은 value 속성이 아예 없거나 None일 수 있으므로 getattr() 사용
+            raw_val = getattr(cell, 'value', None)
+            val = str(raw_val).strip() if raw_val is not None else ""
+            
+            row_data[col_letter] = val
+            if val:
+                has_value = True
+                
+        # 행 전체가 비어있지 않은 경우에만 샘플링 추가
+        if has_value and current_row_number is not None:
+            sample_grid.append({
+                "row_number": current_row_number,
+                "cells": row_data
+            })
+
+    # 추출된 그리드 데이터를 JSON 문자열로 변환
+    grid_json_str = json.dumps(sample_grid, ensure_ascii=False)
+
+    # ... [이후 LLM 호출 프롬프트 코드는 동일하게 유지] ...
