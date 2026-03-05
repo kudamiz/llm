@@ -97,3 +97,85 @@ if __name__ == "__main__":
     # 프론트엔드로 전달할 때는 JSON 형태로 변환하면 좋습니다.
     # frontend_json = extracted_data.to_dict(orient="records")
     pass
+
+
+
+import openpyxl
+import json
+import openai
+
+# openai.api_key = "sk-your-api-key"
+
+def find_qna_coordinates(file_path, sheet_name):
+    print(f"[{sheet_name}] 시트 좌표 탐색 시작...")
+    
+    # 1. Openpyxl로 엑셀 열기 (수식이 아닌 결과값만 가져오기 위해 data_only=True)
+    wb = openpyxl.load_workbook(file_path, data_only=True)
+    ws = wb[sheet_name]
+
+    # 2. LLM에게 보낼 '그리드 데이터' 샘플링
+    # 너무 많은 데이터를 보내면 토큰 낭비이므로, 상위 50행 / 최대 10열(J열)까지만 추출
+    sample_grid = []
+    
+    for row in ws.iter_rows(min_row=1, max_row=50, min_col=1, max_col=10):
+        row_data = {}
+        has_value = False
+        
+        for cell in row:
+            # None이거나 공백인 경우 빈 문자열("")로 처리
+            val = str(cell.value).strip() if cell.value is not None else ""
+            row_data[cell.column_letter] = val
+            if val:
+                has_value = True
+                
+        # 행 전체가 완전히 비어있지 않은 경우에만 샘플에 포함 (노이즈 최소화)
+        if has_value:
+            sample_grid.append({
+                "row_number": row[0].row,
+                "cells": row_data
+            })
+
+    # 추출된 그리드 데이터를 JSON 문자열로 변환
+    grid_json_str = json.dumps(sample_grid, ensure_ascii=False)
+
+    # 3. LLM에게 패턴 분석 요청
+    system_prompt = """
+    너는 비정형 엑셀 데이터 구조 분석 전문가야.
+    사용자가 엑셀 파일의 일부(행 번호와 각 열의 데이터)를 JSON 형태로 줄 거야.
+    엑셀 상단에는 제목, 안내문, 버튼 등 무의미한 노이즈가 있을 수 있어.
+    
+    너의 목표는 '실제 질문들이 시작되는 위치'를 찾는 거야.
+    규칙:
+    1. '질문' 컬럼에는 사용자의 문의 내용이나 질문 텍스트가 들어있어.
+    2. '답변' 컬럼은 질문과 **같은 행**에 위치하며, 현재는 답변을 채워넣기 위해 **비어있어("")**.
+    3. 노이즈(상단 안내문 등)를 무시하고, 실제 질문과 답변 데이터 패턴이 반복적으로 시작되는 첫 번째 행을 찾아.
+    
+    반드시 아래 JSON 형식으로만 응답해:
+    {
+        "question_col": "C",  // 질문이 있는 열 알파벳 (예: A, B, C)
+        "answer_col": "D",    // 비어있는 답변 대상 열 알파벳
+        "start_row": 5        // 실제 데이터가 시작되는 행 번호 (정수)
+    }
+    """
+
+    print("LLM에게 그리드 패턴 분석 요청 중...")
+    response = openai.chat.completions.create(
+        model="gpt-4o", # 복잡한 패턴 인식에는 성능이 좋은 모델 추천
+        response_format={ "type": "json_object" },
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"다음은 엑셀 그리드 데이터야:\n\n{grid_json_str}"}
+        ],
+        temperature=0.0 # 환각 방지를 위해 온도 0
+    )
+    
+    # 4. 결과 반환
+    result_json = response.choices[0].message.content
+    coordinates = json.loads(result_json)
+    
+    print(f"✅ 좌표 탐색 완료! 질문 열: {coordinates['question_col']}, 답변 열: {coordinates['answer_col']}, 시작 행: {coordinates['start_row']}")
+    
+    return coordinates
+
+# --- 실행 예시 ---
+# coords = find_qna_coordinates("customer_questions.xlsx", "Sheet1")
