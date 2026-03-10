@@ -100,3 +100,43 @@ def prepare_vlm_payload(excel_path, output_dir="./output"):
 #     print(f"--- Payload {idx+1} ---")
 #     print(f"Image: {data['image_path']}")
 #     print(f"Prompt Length: {len(data['system_prompt'])} characters\n")
+
+
+import os
+import nest_asyncio
+from llama_parse import LlamaParse
+
+# Jupyter 환경 등에서 비동기 실행을 위한 설정
+nest_asyncio.apply()
+
+def parse_excel_with_multimodal_ai(excel_path, api_key):
+    """
+    최신 AI 파서인 LlamaParse를 이용해 엑셀의 시각적 맥락(순서도, 차트 등)을
+    포함하여 문서를 통째로 분석하는 실습 코드입니다.
+    """
+    os.environ["LLAMA_CLOUD_API_KEY"] = api_key
+
+    print(f"[{excel_path}] 멀티모달 AI 파싱을 시작합니다. (시각적 레이아웃 분석 중...)")
+
+    # LlamaParse 초기화 
+    # premium_mode를 켜면 내부적으로 VLM을 사용하여 차트와 순서도의 의미와 배치를 해석합니다.
+    parser = LlamaParse(
+        result_type="markdown",  # 최종 RAG 적재용 포맷
+        premium_mode=True,       # VLM 기반의 복잡한 시각적 객체 해석 활성화
+        verbose=True
+    )
+
+    # 엑셀 파일 파싱 실행 (클라우드 엔진이 엑셀을 통째로 렌더링하여 맥락을 파악함)
+    documents = parser.load_data(excel_path)
+
+    # 결과 출력
+    for i, doc in enumerate(documents):
+        print(f"\n--- [시각적 맥락이 반영된 파싱 결과 {i+1}] ---")
+        # 내용이 길 수 있으므로 앞부분만 출력
+        print(doc.text[:800] + "\n\n... [중략] ...")
+        
+    return documents
+
+# 실행 예시
+# api_key = "llx-your-api-key-here"
+# parsed_docs = parse_excel_with_multimodal_ai("complex_sample.xlsx", api_key)
