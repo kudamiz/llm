@@ -295,4 +295,77 @@ def safe_convert_without_clipping(excel_path, output_dir="./output"):
     return image_paths
 
 # 실행 예시
-# final_images = safe_convert_without_clipping("my_complex_excel.xlsx")
+# final_images = safe_convert_without_clipping("my_complex_excel.xlsx"
+
+
+import os
+from pdf2image import convert_from_path
+from PIL import Image
+
+def split_pdf_with_overlap(pdf_path, output_dir="./overlap_slices", window_height=1200, overlap=300):
+    """
+    PDF를 하나의 거대한 이미지로 이어 붙인 후, 위아래가 겹치도록 분할하는 실습 코드.
+    - window_height: 잘라낼 각 조각의 세로 길이(픽셀)
+    - overlap: 조각끼리 겹치게 할 세로 길이(픽셀)
+    """
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    
+    print(f"[{base_name}] 1단계: PDF를 이미지로 변환 중...")
+    # PDF의 모든 페이지를 고해상도(DPI 300) 이미지로 변환
+    pages = convert_from_path(pdf_path, dpi=300)
+    
+    if not pages:
+        print("PDF에서 이미지를 추출하지 못했습니다.")
+        return []
+
+    print(f"[{base_name}] 2단계: {len(pages)}장의 페이지를 세로로 이어 붙이는 중...")
+    # 전체 캔버스 크기 계산 (가로는 첫 페이지 기준, 세로는 모든 페이지 높이의 합)
+    total_width = pages[0].width
+    total_height = sum(page.height for page in pages)
+    
+    # 거대한 빈 캔버스 생성
+    stitched_image = Image.new('RGB', (total_width, total_height))
+    
+    # 페이지들을 차례대로 이어 붙이기
+    y_offset = 0
+    for page in pages:
+        stitched_image.paste(page, (0, y_offset))
+        y_offset += page.height
+
+    print(f"[{base_name}] 3단계: 오버랩 슬라이싱(겹쳐 자르기) 진행 중...")
+    
+    current_y = 0
+    slice_count = 0
+    slice_paths = []
+
+    # 슬라이딩 윈도우 방식으로 이미지 자르기
+    while current_y < total_height:
+        # 자를 영역의 끝 지점 계산
+        end_y = min(current_y + window_height, total_height)
+        
+        # (좌, 상, 우, 하) 좌표로 크롭
+        crop_region = (0, current_y, total_width, end_y)
+        slice_img = stitched_image.crop(crop_region)
+        
+        # 조각 이미지 저장
+        slice_filename = f"{base_name}_slice_{slice_count + 1}.png"
+        slice_path = os.path.join(output_dir, slice_filename)
+        slice_img.save(slice_path, "PNG")
+        slice_paths.append(slice_path)
+        
+        # 다음 시작점 계산: 겹치는 부분(overlap)만큼 뒤로 무른다
+        if end_y == total_height:
+            break # 끝까지 다 잘랐으면 반복문 종료
+            
+        current_y = end_y - overlap
+        slice_count += 1
+
+    print(f"✅ 전처리 완료! 총 {len(slice_paths)}개의 오버랩 이미지 조각이 생성되었습니다.")
+    return slice_paths
+
+# 실행 예시 (가로 전체 유지, 세로 1200px씩 자르되 300px씩 겹침)
+# result_images = split_pdf_with_overlap("sample_document.pdf", window_height=1200, overlap=300)
+
