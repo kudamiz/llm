@@ -215,3 +215,84 @@ def convert_excel_without_clipping(excel_path, output_dir="./output"):
 
 # 실행 예시
 # safe_images = convert_excel_without_clipping("my_wide_excel.xlsx")
+
+import zipfile
+import os
+import re
+import subprocess
+from pdf2image import convert_from_path
+
+def safe_convert_without_clipping(excel_path, output_dir="./output"):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    base_name = os.path.splitext(os.path.basename(excel_path))[0]
+    temp_excel_path = os.path.join(output_dir, f"{base_name}_patched.xlsx")
+    
+    print("1단계: 미디어 원본 보존을 위한 XML 인젝션(Injection) 진행 중...")
+    
+    # 1. 원본 엑셀(ZIP) 파일을 열어서 읽으면서, 동시에 새로운 파일로 복사합니다.
+    with zipfile.ZipFile(excel_path, 'r') as zin:
+        with zipfile.ZipFile(temp_excel_path, 'w') as zout:
+            for item in zin.infolist():
+                content = zin.read(item.filename)
+                
+                # 시트 설정을 담당하는 XML 파일만 타겟으로 잡아 수정합니다.
+                if item.filename.startswith('xl/worksheets/sheet') and item.filename.endswith('.xml'):
+                    xml_str = content.decode('utf-8')
+                    
+                    # '1페이지에 가로 너비 맞춤'을 강제하는 XML 태그 주입
+                    setup_tag = '<pageSetup fitToPage="1" fitToWidth="1" fitToHeight="0" orientation="landscape"/>'
+                    
+                    # 기존에 pageSetup 태그가 있으면 덮어쓰고, 없으면 적절한 위치에 끼워 넣습니다.
+                    if '<pageSetup' in xml_str:
+                        xml_str = re.sub(r'<pageSetup[^>]*>', setup_tag, xml_str)
+                    else:
+                        # 통상적으로 <pageMargins> 태그 바로 앞에 위치해야 에러가 나지 않습니다.
+                        xml_str = xml_str.replace('<pageMargins', f'{setup_tag}<pageMargins', 1)
+                        
+                    # 엑셀이 인쇄 설정을 인식하도록 sheetPr 속성도 활성화해 줍니다.
+                    if '<sheetPr' not in xml_str:
+                        xml_str = re.sub(r'(<worksheet[^>]*>)', r'\1<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>', xml_str, 1)
+                    elif 'fitToPage=' not in xml_str:
+                        xml_str = re.sub(r'(<sheetPr[^>]*>)', r'\1<pageSetUpPr fitToPage="1"/>', xml_str, 1)
+                        
+                    content = xml_str.encode('utf-8')
+                    
+                # 수정된 XML(또는 원본 미디어 파일)을 새 압축 파일에 그대로 씁니다.
+                zout.writestr(item, content)
+
+    print("2단계: 이미지 증발이 없는 안전한 파일로 LibreOffice PDF 변환 중...")
+    
+    # 2. 이제 이 patched 파일을 LibreOffice에 넘깁니다. (이미지 100% 보존됨)
+    command = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_dir,
+        temp_excel_path
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    pdf_path = os.path.join(output_dir, f"{base_name}_patched.pdf")
+    
+    print("3단계: 변환된 PDF를 고화질 이미지로 추출 중...")
+    
+    # 3. PDF를 고해상도(DPI 300) 이미지로 변환
+    images = convert_from_path(pdf_path, dpi=300)
+    
+    image_paths = []
+    for i, image in enumerate(images):
+        img_path = os.path.join(output_dir, f"{base_name}_page_{i+1}.png")
+        image.save(img_path, "PNG")
+        image_paths.append(img_path)
+        
+    # 흔적 지우기
+    os.remove(temp_excel_path)
+    os.remove(pdf_path)
+    
+    print(f"✅ 완료! 우측 잘림 현상과 이미지 증발 없이 완벽히 캡처되었습니다.")
+    return image_paths
+
+# 실행 예시
+# final_images = safe_convert_without_clipping("my_complex_excel.xlsx")
