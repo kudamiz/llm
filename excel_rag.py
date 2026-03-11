@@ -369,3 +369,89 @@ def split_pdf_with_overlap(pdf_path, output_dir="./overlap_slices", window_heigh
 # 실행 예시 (가로 전체 유지, 세로 1200px씩 자르되 300px씩 겹침)
 # result_images = split_pdf_with_overlap("sample_document.pdf", window_height=1200, overlap=300)
 
+
+import os
+from pdf2image import convert_from_path
+from PIL import Image, ImageOps
+
+def remove_white_margins(img, padding=30):
+    """
+    이미지에서 위아래의 텅 빈 하얀색 여백을 자동으로 계산하여 잘라내는 함수입니다.
+    가로 너비는 유지하여 나중에 이어 붙일 때 어긋나지 않게 합니다.
+    """
+    # 1. 이미지를 흑백으로 변환하고 색상을 반전시킵니다. 
+    # (흰색 배경은 검은색(0)이 되고, 글씨나 차트는 밝은색이 됩니다.)
+    gray_img = img.convert("L")
+    inverted_img = ImageOps.invert(gray_img)
+    
+    # 2. 내용이 존재하는 영역(0이 아닌 픽셀들)의 경계 상자(Bounding Box)를 찾습니다.
+    bbox = inverted_img.getbbox()
+    
+    if bbox:
+        # bbox = (좌, 상, 우, 하)
+        _, upper, _, lower = bbox
+        
+        # 3. 너무 바짝 자르면 답답하므로 약간의 패딩(Padding)을 줍니다.
+        upper = max(0, upper - padding)
+        lower = min(img.height, lower + padding)
+        
+        # 4. 가로(Width)는 원본 그대로 두고, 세로(Height) 여백만 잘라냅니다.
+        return img.crop((0, upper, img.width, lower))
+    
+    # 만약 페이지 전체가 완전 백지라면 원본을 그대로 반환 (또는 예외 처리 가능)
+    return img
+
+def split_pdf_with_smart_stitching(pdf_path, output_dir="./smart_slices", window_height=1200, overlap=300):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    base_name = os.path.splitext(os.path.basename(pdf_path))[0]
+    
+    print(f"[{base_name}] 1단계: PDF를 이미지로 변환 중...")
+    raw_pages = convert_from_path(pdf_path, dpi=300)
+    
+    if not raw_pages:
+        return []
+
+    print(f"[{base_name}] 2단계: 각 페이지의 상하 빈 공간(여백) 자동 크롭 중...")
+    # 핵심 실습: 각 페이지를 이어붙이기 전에 여백부터 제거합니다.
+    cropped_pages = [remove_white_margins(page) for page in raw_pages]
+    
+    print(f"[{base_name}] 3단계: 여백이 제거된 알맹이들만 세로로 이어 붙이는 중...")
+    total_width = cropped_pages[0].width
+    total_height = sum(page.height for page in cropped_pages)
+    
+    stitched_image = Image.new('RGB', (total_width, total_height), color='white')
+    
+    y_offset = 0
+    for page in cropped_pages:
+        stitched_image.paste(page, (0, y_offset))
+        y_offset += page.height
+
+    print(f"[{base_name}] 4단계: 밀도 높은 이미지를 오버랩 슬라이싱 진행 중...")
+    current_y = 0
+    slice_count = 0
+    slice_paths = []
+
+    while current_y < total_height:
+        end_y = min(current_y + window_height, total_height)
+        crop_region = (0, current_y, total_width, end_y)
+        slice_img = stitched_image.crop(crop_region)
+        
+        slice_filename = f"{base_name}_dense_slice_{slice_count + 1}.png"
+        slice_path = os.path.join(output_dir, slice_filename)
+        slice_img.save(slice_path, "PNG")
+        slice_paths.append(slice_path)
+        
+        if end_y == total_height:
+            break
+            
+        current_y = end_y - overlap
+        slice_count += 1
+
+    print(f"✅ 전처리 완료! 공백이 제거된 알찬 {len(slice_paths)}개의 오버랩 조각이 생성되었습니다.")
+    return slice_paths
+
+# 실행 예시
+# result = split_pdf_with_smart_stitching("presentation.pdf", window_height=1000, overlap=250)
+
