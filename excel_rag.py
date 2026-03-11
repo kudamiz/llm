@@ -455,3 +455,109 @@ def split_pdf_with_smart_stitching(pdf_path, output_dir="./smart_slices", window
 # 실행 예시
 # result = split_pdf_with_smart_stitching("presentation.pdf", window_height=1000, overlap=250)
 
+
+import os
+import zipfile
+import re
+import subprocess
+from pdf2image import convert_from_path
+from PIL import Image
+import openpyxl
+
+def process_excel_to_simple_slices(excel_path, output_dir="./rag_images", window_height=1200, overlap=300):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    base_name = os.path.splitext(os.path.basename(excel_path))[0]
+
+    # 1. 엑셀에서 시트 이름 목록만 가볍게 읽어오기
+    wb = openpyxl.load_workbook(excel_path, read_only=True)
+    sheet_names = wb.sheetnames
+    wb.close()
+
+    print(f"총 {len(sheet_names)}개의 시트가 발견되었습니다: {sheet_names}")
+    all_generated_slices = []
+
+    for sheet_name in sheet_names:
+        print(f"\n--- [{sheet_name}] 시트 처리 시작 ---")
+        temp_xlsx = os.path.join(output_dir, f"temp_{sheet_name}.xlsx")
+        pdf_path = os.path.join(output_dir, f"{base_name}_{sheet_name}.pdf")
+
+        # 2. 타겟 시트만 남기고 나머지 시트 숨기기 (이미지가 날아가는 것을 방지하는 안전한 트릭)
+        with zipfile.ZipFile(excel_path, 'r') as zin:
+            with zipfile.ZipFile(temp_xlsx, 'w') as zout:
+                for item in zin.infolist():
+                    content = zin.read(item.filename)
+                    if item.filename == 'xl/workbook.xml':
+                        xml_str = content.decode('utf-8')
+                        
+                        # 현재 작업 중인 시트가 아닌 것들은 출력되지 않도록 숨김(hidden) 처리
+                        def hide_others(match):
+                            tag = match.group(0)
+                            name = re.search(r'name="([^"]+)"', tag).group(1)
+                            if name != sheet_name and 'state="hidden"' not in tag:
+                                return tag.replace('/>', ' state="hidden"/>').replace('>', ' state="hidden">')
+                            return tag
+                        
+                        xml_str = re.sub(r'<sheet [^>]+>', hide_others, xml_str)
+                        content = xml_str.encode('utf-8')
+                        
+                    zout.writestr(item, content)
+
+        # 3. 개별 시트를 단독 PDF로 변환
+        print(f"1) '{sheet_name}' 단독 PDF 생성 중...")
+        subprocess.run([
+            "soffice", "--headless", "--convert-to", "pdf", 
+            "--outdir", output_dir, temp_xlsx
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # 4. 변환된 PDF를 고화질 캔버스로 이어 붙이기
+        print("2) PDF를 통짜 이미지로 조립 중...")
+        pages = convert_from_path(pdf_path, dpi=200)
+
+        if not pages:
+            os.remove(temp_xlsx)
+            if os.path.exists(pdf_path): os.remove(pdf_path)
+            continue
+
+        total_width = pages[0].width
+        total_height = sum(page.height for page in pages)
+        stitched_image = Image.new('RGB', (total_width, total_height), color='white')
+        
+        y_offset = 0
+        for page in pages:
+            stitched_image.paste(page, (0, y_offset))
+            y_offset += page.height
+
+        # 5. 오버랩(Overlap) 반영하여 여러 장의 이미지로 쪼개기
+        print("3) 오버랩 분할 및 저장 중...")
+        current_y = 0
+        slice_idx = 1
+        
+        while current_y < total_height:
+            end_y = min(current_y + window_height, total_height)
+            slice_img = stitched_image.crop((0, current_y, total_width, end_y))
+            
+            # 시트명이 포함된 직관적인 파일명 (예: report_1분기매출_slice_1.png)
+            slice_filename = f"{base_name}_{sheet_name}_slice_{slice_idx}.png"
+            slice_path = os.path.join(output_dir, slice_filename)
+            
+            slice_img.save(slice_path, "PNG")
+            all_generated_slices.append(slice_path)
+            
+            if end_y == total_height: break
+            current_y = end_y - overlap
+            slice_idx += 1
+
+        # 임시 파일들 정리
+        os.remove(temp_xlsx)
+        os.remove(pdf_path)
+        print(f"✅ '{sheet_name}' 시트 분할 완료! ({slice_idx - 1}개의 이미지 생성)")
+
+    print(f"\n🎉 전체 프로세스 완료! 총 {len(all_generated_slices)}장의 이미지가 준비되었습니다.")
+    return all_generated_slices
+
+# 실행 예시
+# final_image_list = process_excel_to_simple_slices("my_data.xlsx")
+
+
