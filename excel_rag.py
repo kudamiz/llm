@@ -140,3 +140,78 @@ def parse_excel_with_multimodal_ai(excel_path, api_key):
 # 실행 예시
 # api_key = "llx-your-api-key-here"
 # parsed_docs = parse_excel_with_multimodal_ai("complex_sample.xlsx", api_key)
+
+
+import openpyxl
+import subprocess
+import os
+from pdf2image import convert_from_path
+
+def convert_excel_without_clipping(excel_path, output_dir="./output"):
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        
+    base_name = os.path.splitext(os.path.basename(excel_path))[0]
+    temp_excel_path = os.path.join(output_dir, f"{base_name}_temp_scaled.xlsx")
+    
+    print("1단계: openpyxl을 사용해 잘림 방지 인쇄 설정 주입 중...")
+    
+    # 1. 엑셀 파일 로드
+    wb = openpyxl.load_workbook(excel_path)
+    
+    for sheet_name in wb.sheetnames:
+        ws = wb[sheet_name]
+        
+        # 핵심 설정 1: '자동 맞춤' 활성화
+        ws.page_setup.fitToPage = True
+        
+        # 핵심 설정 2: 가로(Width)는 무조건 1페이지 안에 다 들어오도록 압축
+        ws.page_setup.fitToWidth = 1
+        
+        # 핵심 설정 3: 세로(Height)는 데이터 길이에 따라 자연스럽게 여러 장으로 나뉘도록 제한 해제 (0 설정)
+        ws.page_setup.fitToHeight = 0 
+        
+        # 여백을 최소화하여 공간 확보 (단위: 인치)
+        ws.page_margins.left = 0.1
+        ws.page_margins.right = 0.1
+        ws.page_margins.top = 0.1
+        ws.page_margins.bottom = 0.1
+
+    # 조작된 설정을 적용하여 임시 파일로 저장
+    wb.save(temp_excel_path)
+    wb.close()
+    
+    print("2단계: 주입된 임시 파일을 LibreOffice로 PDF 변환 중...")
+    
+    # 2. LibreOffice 실행 (이제 가로 너비가 무조건 1페이지에 맞춰져서 나옵니다)
+    command = [
+        "soffice",
+        "--headless",
+        "--convert-to", "pdf",
+        "--outdir", output_dir,
+        temp_excel_path
+    ]
+    subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    
+    pdf_path = os.path.join(output_dir, f"{base_name}_temp_scaled.pdf")
+    
+    print("3단계: 변환된 PDF를 고화질 이미지로 추출 중...")
+    
+    # 3. PDF를 다시 이미지로 변환 (필요시)
+    images = convert_from_path(pdf_path, dpi=300) # 글씨가 작아질 수 있으므로 고해상도(DPI 300) 권장
+    
+    image_paths = []
+    for i, image in enumerate(images):
+        img_path = os.path.join(output_dir, f"{base_name}_page_{i+1}.png")
+        image.save(img_path, "PNG")
+        image_paths.append(img_path)
+        
+    # 흔적 지우기 (임시 엑셀 파일 및 PDF 삭제)
+    os.remove(temp_excel_path)
+    os.remove(pdf_path)
+    
+    print(f"✅ 완료! 우측 잘림 없이 총 {len(image_paths)}장의 이미지가 생성되었습니다.")
+    return image_paths
+
+# 실행 예시
+# safe_images = convert_excel_without_clipping("my_wide_excel.xlsx")
